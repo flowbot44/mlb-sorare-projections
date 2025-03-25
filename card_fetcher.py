@@ -4,6 +4,7 @@ import re
 import sqlite3
 import time
 import random
+from utils import normalize_name
 
 class SorareMLBClient:
     def __init__(self):
@@ -106,7 +107,7 @@ class SorareMLBClient:
         
         conn = sqlite3.connect('mlb_sorare.db')
         cursor = conn.cursor()
-        #cursor.execute("DROP TABLE IF EXISTS cards")  # Drop the table if it exists
+        cursor.execute("DELETE FROM cards WHERE username = ?", (username,))  
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS cards (
                 slug TEXT PRIMARY KEY, 
@@ -125,19 +126,34 @@ class SorareMLBClient:
             cursor.execute('''
                 INSERT OR REPLACE INTO cards (slug, name, birthday, year, rarity, positions, sealed, username)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (card['slug'], card['name'], card['birthday'], card['year'], card['rarity'], ', '.join(card['positions']), card['sealed'], username))
+            ''', (card['slug'], card['name'], card['birthday'], card['year'], extract_rarity(card['rarity']), ', '.join(card['positions']), card['sealed'], username))
         
         conn.commit()
         conn.close()
         
         print(f"Data saved to SQLite database 'mlb_sorare.db'")
         return {"nickname": username, "cards": formatted_cards}
+def extract_rarity(rarity_string):
+    """
+    Extracts the base rarity (common, rare, limited) from a string using split.
+
+    Args:
+      rarity_string: The rarity string, which may include a UUID.
+
+    Returns:
+      The base rarity (common, rare, limited), or the original string if no hyphen.
+    """
+    if rarity_string is None:
+        return None
+
+    parts = rarity_string.split("-")
+    return parts[0] if parts else rarity_string
 
 def parse_player_string(player_string):
     match = re.match(r"(.+)-(\d{8})-(\d{4})-(.+)-(\d+)", player_string)
     if match:
         return {
-            "name": match.group(1).replace("-", " ").title(),
+            "name": normalize_name(match.group(1).replace("-", " ")),
             "birthday": match.group(2),
             "card_year": match.group(3),
             "rarity": match.group(4),

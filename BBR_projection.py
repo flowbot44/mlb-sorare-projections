@@ -1,5 +1,6 @@
 import pandas as pd
 import sqlite3
+from utils import normalize_name
 
 # Connect to SQLite database (creates 'mlb_sorare.db' if it doesn't exist)
 conn = sqlite3.connect('mlb_sorare.db')
@@ -7,8 +8,8 @@ conn = sqlite3.connect('mlb_sorare.db')
 # Drop existing tables to ensure fresh data
 conn.execute('DROP TABLE IF EXISTS hitters_full_season')
 conn.execute('DROP TABLE IF EXISTS pitchers_full_season')
-conn.execute('DROP TABLE IF EXISTS hitters_first_week')
-conn.execute('DROP TABLE IF EXISTS pitchers_first_week')
+conn.execute('DROP TABLE IF EXISTS hitters_per_game')
+conn.execute('DROP TABLE IF EXISTS pitchers_per_unit')
 
 # Create table for full-season hitter projections
 conn.execute('''CREATE TABLE hitters_full_season (
@@ -75,9 +76,12 @@ conn.execute('''CREATE TABLE pitchers_full_season (
     "Name-additional" TEXT PRIMARY KEY
 );''')
 
-# Read the CSV files
+# Read the CSV files and normalize names
 hitters = pd.read_csv('2025_bbr_hitter_projections.csv')
+hitters['Name'] = hitters['Name'].apply(normalize_name)  # Normalize hitter names
+
 pitchers = pd.read_csv('2025_bbr_pitching_projections.csv')
+pitchers['Name'] = pitchers['Name'].apply(normalize_name)  # Normalize pitcher names
 
 # Insert full-season data into the database
 hitters.to_sql('hitters_full_season', conn, if_exists='replace', index=False)
@@ -100,23 +104,15 @@ def prorate_hitter(row, games_per_season=162):
     return row
 
 # Define proration function for pitchers
-def prorate_pitcher(row, ip_per_start=5.5):
+def prorate_pitcher(row):
     """Prorate pitcher stats based on role: per inning for RP, per start for SP."""
     if row['IP'] == 0:
         for stat in ['IP', 'H', 'R', 'ER', 'HR', 'BB', 'IBB', 'SO', 'HBP', 'BK', 'WP', 'BF', 'W', 'L', 'SV']:
             row[stat] = 0.0
-    elif row['Rel'] == 'SP':
-        # Starting pitchers: per game started
-        starts = row['IP'] / ip_per_start if row['IP'] > 0 else 0
-        if starts > 0:
-            for stat in ['IP', 'H', 'R', 'ER', 'HR', 'BB', 'IBB', 'SO', 'HBP', 'BK', 'WP', 'BF', 'W', 'L']:
-                row[stat] = row[stat] / starts
-            row['SV'] = 0.0  # Starters typically don’t get saves
-    elif row['Rel'] == 'RP':
-        # Relief pitchers: per inning
+    else:
         ip = row['IP']
         if ip > 0:
-            for stat in ['IP', 'H', 'R', 'ER', 'HR', 'BB', 'IBB', 'SO', 'HBP', 'BK', 'WP', 'BF', 'W', 'L', 'SV']:
+            for stat in ['IP', 'H', 'R', 'ER', 'HR', 'BB', 'IBB', 'SO', 'HBP', 'BK', 'WP', 'BF', 'SV']:
                 row[stat] = row[stat] / ip
     # Rate stats (ERA, WHIP, H9, etc.) remain unchanged
     return row
@@ -124,8 +120,6 @@ def prorate_pitcher(row, ip_per_start=5.5):
 # Generate per-unit projections
 hitters_per_game = hitters_full.apply(prorate_hitter, axis=1)
 pitchers_per_unit = pitchers_full.apply(prorate_pitcher, axis=1)
-
-conn.execute('DROP TABLE IF EXISTS hitters_per_game')
 
 # Create tables for per-unit projections
 conn.execute('''CREATE TABLE hitters_per_game (
@@ -159,7 +153,6 @@ conn.execute('''CREATE TABLE hitters_per_game (
     "Name-additional" TEXT PRIMARY KEY
 );''')
 
-conn.execute('DROP TABLE IF EXISTS pitchers_per_unit')
 conn.execute('''CREATE TABLE pitchers_per_unit (
     Rk INTEGER,
     Name TEXT,
@@ -199,4 +192,4 @@ pitchers_per_unit.to_sql('pitchers_per_unit', conn, if_exists='replace', index=F
 # Close the database connection
 conn.close()
 
-print("Full-season and per-unit projections (per game for hitters/SP, per inning for RP) have been freshly imported and generated in 'mlb_sorare.db'.")
+print("Full-season and per-unit projections (per game for hitters/SP, per inning for RP) have been freshly imported and generated in 'mlb_sorare.db' with normalized names.")
