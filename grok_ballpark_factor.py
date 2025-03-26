@@ -5,6 +5,15 @@ from datetime import datetime, timedelta, date
 import pytz
 from utils import normalize_name
 
+
+SCORING_MATRIX = {
+    'hitting': {'R': 3, 'RBI': 3, '1B': 2, '2B': 5, '3B': 8, 'HR': 10, 'BB': 2, 'K': -1, 'SB': 5, 'CS': -1, 'HBP': 2},
+    'pitching': {'IP': 3, 'K': 2, 'H': -0.5, 'ER': -2, 'BB': -1, 'HBP': -1, 'W': 5, 'RA': 5, 'S': 10}
+}
+INJURY_STATUSES_OUT = ('Out', '15-Day-IL', '60-Day-IL')
+DAY_TO_DAY_STATUS = 'Day-To-Day'
+DAY_TO_DAY_REDUCTION = 0.8
+
 # --- Game Week Handling ---
 def determine_game_week(current_date):
     """
@@ -302,6 +311,131 @@ def calculate_sorare_pitcher_score(stats, scoring_matrix):
     score += stats.get('SV', 0) * scoring_matrix['pitching'].get('S', 0)
     return score
 
+def adjust_score_for_injury(base_score, injury_status, return_estimate, game_date):
+    """Adjust the Sorare score based on injury status and return estimate."""
+    if not return_estimate:
+        return_estimate_date = None
+    else:
+        return_estimate_date = datetime.strptime(return_estimate, '%Y-%m-%d').date()
+
+    if injury_status in INJURY_STATUSES_OUT and (not return_estimate_date or game_date <= return_estimate_date):
+        #print(f"Player is {injury_status}, setting projection to 0 until {return_estimate}")
+        return 0.0
+    if injury_status == DAY_TO_DAY_STATUS and return_estimate_date and game_date <= return_estimate_date:
+        #print(f"Player is Day-To-Day, reducing projection to {DAY_TO_DAY_REDUCTION*100}% until {return_estimate}")
+        return base_score * DAY_TO_DAY_REDUCTION
+    return base_score
+
+def adjust_stats(stats, park_factors, is_dome, orientation, wind_dir, wind_speed, temp, is_pitcher=False):
+    """Apply park and weather adjustments to player stats."""
+    adjusted_stats = {}
+    for stat, value in stats.items():
+        park_adjustment = (1 / park_factors.get(stat, 1.0) if is_pitcher and stat in ['H', 'ER', 'BB', 'HR']
+                           else park_factors.get(stat, 1.0))
+        weather_factor = (1.0 if is_dome or stat != 'HR' 
+                          else get_wind_effect(orientation or 0, wind_dir or 0, wind_speed or 0) * get_temp_adjustment(temp or 70))
+        adjusted_stats[stat] = value * park_adjustment * weather_factor
+    return adjusted_stats
+
+def process_hitter(conn, game_data, hitter_data, injuries, game_week_id):
+    """Process a single hitter's projection."""
+    game_id, game_date, time, stadium_id = game_data[:4]  # Corrected to include time and get stadium_id
+    game_date_obj = datetime.strptime(game_date, '%Y-%m-%d').date()
+    
+    player_name = normalize_name(hitter_data.get("Name"))
+    if not player_name:
+        print(f"Warning: Null Name for hitter in game {game_id}")
+        return
+    
+    #print(f"Processing hitter: {player_name}, Game ID: {game_id}, Stadium ID: {stadium_id}")
+    
+    c = conn.cursor()
+    stadium_data = c.execute("""
+        SELECT s.is_dome, s.orientation, w.wind_dir, w.wind_speed, w.temp 
+        FROM Stadiums s 
+        LEFT JOIN WeatherForecasts w ON w.game_id = ?
+        WHERE s.id = ?
+    """, (game_id, stadium_id)).fetchone()
+    
+    if not stadium_data:
+        print(f"No stadium data for game {game_id} with stadium_id {stadium_id}")
+        is_dome, orientation, wind_dir, wind_speed, temp = (0, 0, 0, 0, 70)  # Neutral defaults
+    else:
+        is_dome, orientation, wind_dir, wind_speed, temp = stadium_data
+    
+    park_factors = {row[0]: row[1] / 100 for row in c.execute("SELECT factor_type, value FROM ParkFactors WHERE stadium_id = ?", (stadium_id,)).fetchall()}
+    if not park_factors:
+        print(f"No park factors for stadium_id {stadium_id}, using default 1.0")
+        park_factors = {'R': 1.0, 'RBI': 1.0, 'H': 1.0, '2B': 1.0, '3B': 1.0, 'HR': 1.0, 'BB': 1.0, 'SO': 1.0, 'SB': 1.0, 'CS': 1.0, 'HBP': 1.0}
+    
+    base_stats = {
+        'R': hitter_data.get('R', 0), 'RBI': hitter_data.get('RBI', 0), 'H': hitter_data.get('H', 0),
+        '2B': hitter_data.get('2B', 0), '3B': hitter_data.get('3B', 0), 'HR': hitter_data.get('HR', 0),
+        'BB': hitter_data.get('BB', 0), 'SO': hitter_data.get('SO', 0), 'SB': hitter_data.get('SB', 0),
+        'CS': hitter_data.get('CS', 0), 'HBP': hitter_data.get('HBP', 0)
+    }
+    adjusted_stats = adjust_stats(base_stats, park_factors, is_dome, orientation, wind_dir, wind_speed, temp)
+    base_score = calculate_sorare_hitter_score(adjusted_stats, SCORING_MATRIX)
+    final_score = adjust_score_for_injury(base_score, injuries.get(player_name, {'status': 'Active', 'return_estimate': None})['status'], 
+                                          injuries.get(player_name, {'status': 'Active', 'return_estimate': None})['return_estimate'], game_date_obj)
+    
+    c.execute("INSERT INTO AdjustedProjections (player_name, game_id, game_date, sorare_score, game_week) VALUES (?, ?, ?, ?, ?)",
+              (player_name, game_id, game_date, final_score, game_week_id))
+    
+def process_pitcher(conn, game_data, pitcher_data, injuries, game_week_id, is_starter=False, processed_pitchers=None):
+    """Process a single pitcher's projection (starter or reliever)."""
+    if is_starter:
+        game_id, game_date, time, stadium_id = game_data[:4]  # Corrected for starters
+    else:
+        game_id, stadium_id, game_date = game_data  # Relievers unchanged
+    game_date_obj = datetime.strptime(game_date, '%Y-%m-%d').date()
+    
+    player_name = normalize_name(pitcher_data.get("Name"))
+    player_id = pitcher_data.get("player_id")
+    if not player_name or (is_starter and not player_id):
+        print(f"Warning: Null Name or ID for pitcher in game {game_id}")
+        return
+    
+    if is_starter and processed_pitchers is not None:
+        processed_pitchers.add(player_id)
+    
+    c = conn.cursor()
+    stadium_data = c.execute("""
+        SELECT s.is_dome, s.orientation, w.wind_dir, w.wind_speed, w.temp 
+        FROM Stadiums s 
+        LEFT JOIN WeatherForecasts w ON w.game_id = ?
+        WHERE s.id = ?
+    """, (game_id, stadium_id)).fetchone()
+    
+    if not stadium_data:
+        print(f"No stadium data for game {game_id} with stadium_id {stadium_id}")
+        is_dome, orientation, wind_dir, wind_speed, temp = (0, 0, 0, 0, 70)
+    else:
+        is_dome, orientation, wind_dir, wind_speed, temp = stadium_data
+    
+    park_factors = {row[0]: row[1] / 100 for row in c.execute("SELECT factor_type, value FROM ParkFactors WHERE stadium_id = ?", (stadium_id,)).fetchall()}
+    if not park_factors:
+        print(f"No park factors for stadium_id {stadium_id}, using default 1.0")
+        park_factors = {'IP': 1.0, 'SO': 1.0, 'H': 1.0, 'ER': 1.0, 'BB': 1.0, 'HBP': 1.0, 'W': 1.0, 'SV': 1.0}
+    
+    base_stats = {
+        'IP': pitcher_data.get('IP', 0), 'SO': pitcher_data.get('SO', 0), 'H': pitcher_data.get('H', 0),
+        'ER': pitcher_data.get('ER', 0), 'BB': pitcher_data.get('BB', 0), 'HBP': pitcher_data.get('HBP', 0),
+        'W': pitcher_data.get('W', 0), 'SV': pitcher_data.get('SV', 0)
+    }
+    adjusted_stats = adjust_stats(base_stats, park_factors, is_dome, orientation, wind_dir, wind_speed, temp, is_pitcher=True)
+    if is_starter:
+        adjusted_stats['W'] = base_stats['W'] / 30
+        adjusted_stats['SV'] = 0
+    else:
+        adjusted_stats['W'] = 0
+    base_score = calculate_sorare_pitcher_score(adjusted_stats, SCORING_MATRIX) * (5 if is_starter else 1)
+    final_score = adjust_score_for_injury(base_score, injuries.get(player_name, {'status': 'Active', 'return_estimate': None})['status'], 
+                                          injuries.get(player_name, {'status': 'Active', 'return_estimate': None})['return_estimate'], game_date_obj)
+    
+    c.execute("INSERT INTO AdjustedProjections (player_name, game_id, game_date, sorare_score, game_week) VALUES (?, ?, ?, ?, ?)",
+              (player_name, game_id, game_date, final_score, game_week_id))
+    
 def calculate_adjustments(conn, start_date, end_date, game_week_id):
     if not isinstance(start_date, str):
         start_date = start_date.strftime('%Y-%m-%d')
@@ -311,160 +445,60 @@ def calculate_adjustments(conn, start_date, end_date, game_week_id):
     c = conn.cursor()
     c.execute("DELETE FROM AdjustedProjections WHERE game_week = ?", (game_week_id,))
     
-    scoring_matrix = {
-        'hitting': {'R': 3, 'RBI': 3, '1B': 2, '2B': 5, '3B': 8, 'HR': 10, 'BB': 2, 'K': -1, 'SB': 5, 'CS': -1, 'HBP': 2},
-        'pitching': {'IP': 3, 'K': 2, 'H': -0.5, 'ER': -2, 'BB': -1, 'HBP': -1, 'W': 5, 'RA': 5, 'S': 10}
-    }
-    
-    # Fetch all injury data into a dictionary with status and return_estimate
     injuries = {row[0]: {'status': row[1], 'return_estimate': row[2]} 
                 for row in c.execute("SELECT player_name, status, return_estimate FROM injuries").fetchall()}
     
-    games = c.execute("SELECT id, date, time, stadium_id, home_team_id, away_team_id, home_probable_pitcher_id, away_probable_pitcher_id FROM Games WHERE date BETWEEN ? AND ?",
-                      (start_date, end_date)).fetchall()
+    games = c.execute("""
+        SELECT id, date, time, stadium_id, home_team_id, away_team_id, home_probable_pitcher_id, away_probable_pitcher_id 
+        FROM Games WHERE date BETWEEN ? AND ?
+    """, (start_date, end_date)).fetchall()
     
     processed_pitchers = set()
     
+    # Process hitters and starters
     for game in games:
-        game_id, game_date, time, stadium_id, home_team_id, away_team_id, home_probable_pitcher_id, away_probable_pitcher_id = game
-        game_date_obj = datetime.strptime(game_date, '%Y-%m-%d').date()
-        
-        stadium_data = c.execute("""
-            SELECT s.is_dome, s.orientation, w.wind_dir, w.wind_speed, w.temp 
-            FROM Stadiums s 
-            LEFT JOIN WeatherForecasts w ON w.game_id = ?
-            WHERE s.id = ?
-        """, (game_id, stadium_id)).fetchone()
-        if not stadium_data:
-            continue
-        is_dome, orientation, wind_dir, wind_speed, temp = stadium_data
-        
-        park_factors = {row[0]: row[1] / 100 for row in c.execute("SELECT factor_type, value FROM ParkFactors WHERE stadium_id = ?", (stadium_id,)).fetchall()}
-        
+        game_id, game_date, time, stadium_id, home_team_id, away_team_id, home_pitcher_id, away_pitcher_id = game
         participating_team_ids = (home_team_id, away_team_id)
         
-        # Process hitters
+        # Hitters
         hitters = c.execute("""
             SELECT h.* FROM hitters_per_game h 
             JOIN PlayerTeams pt ON h.Name = pt.player_name 
             WHERE pt.team_id IN (?, ?)
         """, participating_team_ids).fetchall()
         hitter_columns = [col[0] for col in c.description]
-        
         for hitter in hitters:
             hitter_dict = {hitter_columns[i]: hitter[i] for i in range(len(hitter_columns))}
-            player_name = normalize_name(hitter_dict.get("Name"))
-            if player_name is None:
-                print(f"Warning: Null Name for hitter in game {game_id}")
-                continue
-            
-            # Check injury status and return estimate
-            injury_info = injuries.get(player_name, {'status': 'Active', 'return_estimate': None})
-            injury_status = injury_info['status']
-            return_estimate = injury_info['return_estimate']
-            if return_estimate:
-                return_estimate = datetime.strptime(return_estimate, '%Y-%m-%d').date()
-            
-            if injury_status in ('Out', '15-Day-IL', '60-Day-IL') and (not return_estimate or game_date_obj <= return_estimate):
-                sorare_score = 0.0
-                print(f"Player {player_name} is {injury_status}, setting projection to 0 until {return_estimate}")
-            else:
-                base_stats = {
-                    'R': hitter_dict.get('R', 0), 'RBI': hitter_dict.get('RBI', 0), 'H': hitter_dict.get('H', 0),
-                    '2B': hitter_dict.get('2B', 0), '3B': hitter_dict.get('3B', 0), 'HR': hitter_dict.get('HR', 0),
-                    'BB': hitter_dict.get('BB', 0), 'SO': hitter_dict.get('SO', 0), 'SB': hitter_dict.get('SB', 0),
-                    'CS': hitter_dict.get('CS', 0), 'HBP': hitter_dict.get('HBP', 0)
-                }
-                adjusted_stats = {}
-                for stat, value in base_stats.items():
-                    park_adjustment = park_factors.get(stat, 1.0)
-                    weather_factor = 1.0 if is_dome or stat != 'HR' else get_wind_effect(orientation or 0, wind_dir or 0, wind_speed or 0) * get_temp_adjustment(temp or 70)
-                    adjusted_stats[stat] = value * park_adjustment * weather_factor
-                sorare_score = calculate_sorare_hitter_score(adjusted_stats, scoring_matrix)
-                
-                # Apply 80% reduction for Day-to-Day up to and including return_estimate
-                if injury_status == 'Day-To-Day' and return_estimate and game_date_obj <= return_estimate:
-                    sorare_score *= 0.8
-                    print(f"Player {player_name} is Day-To-Day, reducing projection to 80% until {return_estimate}")
-            
-            c.execute("INSERT INTO AdjustedProjections (player_name, game_id, game_date, sorare_score, game_week) VALUES (?, ?, ?, ?, ?)",
-                      (player_name, game_id, game_date, sorare_score, game_week_id))
+            process_hitter(conn, game, hitter_dict, injuries, game_week_id)
         
-        # Process pitchers (only probable starters)
-        safe_home_pitcher_id = home_probable_pitcher_id if home_probable_pitcher_id else ""
-        safe_away_pitcher_id = away_probable_pitcher_id if away_probable_pitcher_id else ""
-        
+        # Starters
+        safe_home_pitcher_id = home_pitcher_id if home_pitcher_id else ""
+        safe_away_pitcher_id = away_pitcher_id if away_pitcher_id else ""
         probable_starters = c.execute("""
             SELECT p.*, pt.player_id 
             FROM pitchers_per_unit p 
             JOIN PlayerTeams pt ON p.Name = pt.player_name 
             WHERE pt.player_id IN (?, ?) AND pt.team_id IN (?, ?)
         """, (safe_home_pitcher_id, safe_away_pitcher_id, home_team_id, away_team_id)).fetchall()
-        
         pitcher_columns = [col[0] for col in c.description]
+        
+        if not probable_starters and (home_pitcher_id or away_pitcher_id):  # If we expect pitchers but get none
+            print(f"Warning: No starting pitcher data found for game {game_id} on {game_date} (Home ID: {home_pitcher_id}, Away ID: {away_pitcher_id})")
+        elif not home_pitcher_id and not away_pitcher_id:
+            print(f"Warning: No probable pitcher IDs provided for game {game_id} on {game_date}")
         
         for pitcher in probable_starters:
             pitcher_dict = {pitcher_columns[i]: pitcher[i] for i in range(len(pitcher_columns))}
-            player_name = normalize_name(pitcher_dict.get("Name"))
-            player_id = pitcher_dict.get("player_id")
-            
-            if player_name is None:
-                print(f"Warning: Null Name for pitcher in game {game_id}")
-                continue
-                
-            processed_pitchers.add(player_id)
-            
-            # Check injury status and return estimate
-            injury_info = injuries.get(player_name, {'status': 'Active', 'return_estimate': None})
-            injury_status = injury_info['status']
-            return_estimate = injury_info['return_estimate']
-            if return_estimate:
-                return_estimate = datetime.strptime(return_estimate, '%Y-%m-%d').date()
-            
-            if injury_status in ('Out', '15-Day-IL', '60-Day-IL') and (not return_estimate or game_date_obj <= return_estimate):
-                sorare_score = 0.0
-                print(f"Player {player_name} is {injury_status}, setting projection to 0 until {return_estimate}")
-            else:
-                base_stats = {
-                    'IP': pitcher_dict.get('IP', 0), 'SO': pitcher_dict.get('SO', 0), 'H': pitcher_dict.get('H', 0),
-                    'ER': pitcher_dict.get('ER', 0), 'BB': pitcher_dict.get('BB', 0), 'HBP': pitcher_dict.get('HBP', 0),
-                    'W': pitcher_dict.get('W', 0), 'SV': pitcher_dict.get('SV', 0)
-                }
-                adjusted_stats = {}
-                for stat, value in base_stats.items():
-                    park_adjustment = 1 / park_factors.get(stat, 1.0) if stat in ['H', 'ER', 'BB', 'HR'] and stat in park_factors else park_factors.get(stat, 1.0)
-                    weather_factor = 1.0 if is_dome or stat != 'HR' else get_wind_effect(orientation or 0, wind_dir or 0, wind_speed or 0) * get_temp_adjustment(temp or 70)
-                    adjusted_stats[stat] = value * park_adjustment * weather_factor
-                    if stat == 'W':
-                        adjusted_stats[stat] = value / 30
-                    elif stat == 'SV':
-                        adjusted_stats[stat] = 0
-                sorare_score = calculate_sorare_pitcher_score(adjusted_stats, scoring_matrix) * 5
-                
-                # Apply 80% reduction for Day-to-Day up to and including return_estimate
-                if injury_status == 'Day-To-Day' and return_estimate and game_date_obj <= return_estimate:
-                    sorare_score *= 0.8
-                    print(f"Player {player_name} is Day-To-Day, reducing projection to 80% until {return_estimate}")
-            
-            c.execute("INSERT INTO AdjustedProjections (player_name, game_id, game_date, sorare_score, game_week) VALUES (?, ?, ?, ?, ?)",
-                     (player_name, game_id, game_date, sorare_score, game_week_id))
+            process_pitcher(conn, game, pitcher_dict, injuries, game_week_id, is_starter=True, processed_pitchers=processed_pitchers)
     
     # Process relief pitchers
-    teams = c.execute("""
+    team_ids = [team[0] for team in c.execute("""
         SELECT DISTINCT home_team_id as team_id FROM Games WHERE date BETWEEN ? AND ?
         UNION
         SELECT DISTINCT away_team_id as team_id FROM Games WHERE date BETWEEN ? AND ?
-    """, (start_date, end_date, start_date, end_date)).fetchall()
-    team_ids = [team[0] for team in teams]
+    """, (start_date, end_date, start_date, end_date)).fetchall()]
     
-    probable_starter_ids = set()
-    for game in games:
-        home_pitcher_id = game[6]
-        away_pitcher_id = game[7]
-        if home_pitcher_id:
-            probable_starter_ids.add(home_pitcher_id)
-        if away_pitcher_id:
-            probable_starter_ids.add(away_pitcher_id)
+    probable_starter_ids = {game[6] for game in games if game[6]} | {game[7] for game in games if game[7]}
     
     for team_id in team_ids:
         relief_pitchers = c.execute("""
@@ -474,80 +508,17 @@ def calculate_adjustments(conn, start_date, end_date, game_week_id):
             WHERE pt.team_id = ? AND pt.player_id NOT IN ({})
         """.format(','.join(['?' for _ in probable_starter_ids]) if probable_starter_ids else "'dummy'"), 
         [team_id] + list(probable_starter_ids) if probable_starter_ids else [team_id]).fetchall()
-        
         pitcher_columns = [col[0] for col in c.description]
         
         for pitcher in relief_pitchers:
             pitcher_dict = {pitcher_columns[i]: pitcher[i] for i in range(len(pitcher_columns))}
-            player_name = normalize_name(pitcher_dict.get("Name"))
-            player_id = pitcher_dict.get("player_id")
-            
-            if player_name is None or player_id is None:
-                continue
-                
-            if player_id in processed_pitchers:
-                continue
-                
-            # Check injury status and return estimate
-            injury_info = injuries.get(player_name, {'status': 'Active', 'return_estimate': None})
-            injury_status = injury_info['status']
-            return_estimate = injury_info['return_estimate']
-            if return_estimate:
-                return_estimate = datetime.strptime(return_estimate, '%Y-%m-%d').date()
-            
-            team_games = c.execute("""
-                SELECT id, stadium_id, date FROM Games 
-                WHERE (home_team_id = ? OR away_team_id = ?) AND date BETWEEN ? AND ?
-            """, (team_id, team_id, start_date, end_date)).fetchall()
-            
-            for game_data in team_games:
-                game_id, stadium_id, game_date = game_data
-                game_date_obj = datetime.strptime(game_date, '%Y-%m-%d').date()
-                
-                stadium_data = c.execute("""
-                    SELECT s.is_dome, s.orientation, w.wind_dir, w.wind_speed, w.temp 
-                    FROM Stadiums s 
-                    LEFT JOIN WeatherForecasts w ON w.game_id = ?
-                    WHERE s.id = ?
-                """, (game_id, stadium_id)).fetchone()
-                
-                if not stadium_data:
-                    continue
-                    
-                is_dome, orientation, wind_dir, wind_speed, temp = stadium_data
-                
-                park_factors = {row[0]: row[1] / 100 for row in c.execute(
-                    "SELECT factor_type, value FROM ParkFactors WHERE stadium_id = ?", 
-                    (stadium_id,)).fetchall()}
-                
-                if injury_status in ('Out', '15-Day-IL', '60-Day-IL') and (not return_estimate or game_date_obj <= return_estimate):
-                    sorare_score = 0.0
-                    print(f"Player {player_name} is {injury_status}, setting projection to 0 until {return_estimate}")
-                else:
-                    base_stats = {
-                        'IP': pitcher_dict.get('IP', 0), 'SO': pitcher_dict.get('SO', 0), 'H': pitcher_dict.get('H', 0),
-                        'ER': pitcher_dict.get('ER', 0), 'BB': pitcher_dict.get('BB', 0), 'HBP': pitcher_dict.get('HBP', 0),
-                        'W': pitcher_dict.get('W', 0), 'SV': pitcher_dict.get('SV', 0)
-                    }
-                    adjusted_stats = {}
-                    for stat, value in base_stats.items():
-                        park_adjustment = 1 / park_factors.get(stat, 1.0) if stat in ['H', 'ER', 'BB', 'HR'] and stat in park_factors else park_factors.get(stat, 1.0)
-                        weather_factor = 1.0 if is_dome or stat != 'HR' else get_wind_effect(orientation or 0, wind_dir or 0, wind_speed or 0) * get_temp_adjustment(temp or 70)
-                        adjusted_stats[stat] = value * park_adjustment * weather_factor
-                        if stat == 'W':
-                            adjusted_stats[stat] = 0
-                    
-                    sorare_score = calculate_sorare_pitcher_score(adjusted_stats, scoring_matrix)
-                    
-                    # Apply 80% reduction for Day-to-Day up to and including return_estimate
-                    if injury_status == 'Day-To-Day' and return_estimate and game_date_obj <= return_estimate:
-                        sorare_score *= 0.8
-                        print(f"Player {player_name} is Day-To-Day, reducing projection to 80% until {return_estimate}")
-                
-                c.execute("""
-                    INSERT INTO AdjustedProjections (player_name, game_id, game_date, sorare_score, game_week) 
-                    VALUES (?, ?, ?, ?, ?)
-                """, (player_name, game_id, game_date, sorare_score, game_week_id))
+            if pitcher_dict.get("player_id") not in processed_pitchers:
+                team_games = c.execute("""
+                    SELECT id, stadium_id, date FROM Games 
+                    WHERE (home_team_id = ? OR away_team_id = ?) AND date BETWEEN ? AND ?
+                """, (team_id, team_id, start_date, end_date)).fetchall()
+                for team_game in team_games:
+                    process_pitcher(conn, team_game, pitcher_dict, injuries, game_week_id)
     
     conn.commit()
 

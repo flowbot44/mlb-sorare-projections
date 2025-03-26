@@ -32,7 +32,7 @@ def get_all_players():
 def get_all_projections():
     conn = sqlite3.connect(db_path)  # Create/connect to the database file
 
-    cursor = conn.execute("SELECT * FROM AdjustedProjections where player_name = 'CJ ABRAMS'")
+    cursor = conn.execute("SELECT * FROM AdjustedProjections ")
 
     for row in cursor:
         print(row) #This will print tuples of the rows in the db.
@@ -52,9 +52,9 @@ def get_all_teams():
 
 def main():
     #get_all_players()
-    get_cards_with_injuries()
-    #get_all_projections()
-    #get_all_teams()
+    #get_cards_with_injuries()
+    get_all_projections()
+    get_all_teams()
 
 if __name__ == "__main__":
     main()
