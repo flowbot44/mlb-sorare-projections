@@ -3,7 +3,7 @@ import requests
 import pandas as pd
 from datetime import datetime, timedelta, date
 import pytz
-from utils import normalize_name
+from utils import normalize_name, determine_game_week
 
 
 SCORING_MATRIX = {
@@ -13,35 +13,6 @@ SCORING_MATRIX = {
 INJURY_STATUSES_OUT = ('Out', '15-Day-IL', '60-Day-IL')
 DAY_TO_DAY_STATUS = 'Day-To-Day'
 DAY_TO_DAY_REDUCTION = 0.8
-
-# --- Game Week Handling ---
-def determine_game_week(current_date):
-    """
-    Determine the start and end dates of the appropriate game week based on when the script is run:
-    - If run Tuesday through Friday: return the upcoming/current Friday-Sunday period
-    - If run Saturday through Monday: return the upcoming/current Monday-Thursday period
-    
-    Special case for season start (March 27-30, 2025)
-    """
-    if isinstance(current_date, str):
-        current_date = datetime.strptime(current_date, '%Y-%m-%d').date()
-    
-    season_start = date(2025, 3, 27)
-    if current_date <= date(2025, 3, 30):
-        return season_start, date(2025, 3, 30)
-    
-    day_of_week = current_date.weekday()
-    
-    if 1 <= day_of_week <= 4:  # Tuesday to Friday
-        days_until_friday = (4 - day_of_week) % 7
-        target_friday = current_date + timedelta(days=days_until_friday)
-        target_sunday = target_friday + timedelta(days=2)
-        return target_friday, target_sunday
-    else:  # Saturday, Sunday, or Monday
-        days_until_monday = (0 - day_of_week) % 7
-        target_monday = current_date + timedelta(days=days_until_monday)
-        target_thursday = target_monday + timedelta(days=3)
-        return target_monday, target_thursday
 
 # --- Database Initialization ---
 def init_db(db_path='mlb_sorare.db'):
@@ -238,7 +209,7 @@ def fetch_weather_and_store(conn, start_date, end_date):
             continue
         lat, lon = stadium[0], stadium[1]
         if lat is None or lon is None:
-            print(f"Skipping game {game_id} due to missing stadium {stadium_id} coordinates.")
+            print(f"Skipping game https://www.mlb.com/gameday/{game_id} due to missing stadium {stadium_id} coordinates.")
             continue
 
         if time.endswith('Z'):
@@ -313,16 +284,18 @@ def calculate_sorare_pitcher_score(stats, scoring_matrix):
 
 def adjust_score_for_injury(base_score, injury_status, return_estimate, game_date):
     """Adjust the Sorare score based on injury status and return estimate."""
-    if not return_estimate:
+    if not return_estimate or return_estimate == 'No estimated return date':
         return_estimate_date = None
     else:
-        return_estimate_date = datetime.strptime(return_estimate, '%Y-%m-%d').date()
+        try:
+            return_estimate_date = datetime.strptime(return_estimate, '%Y-%m-%d').date()
+        except ValueError:
+            print(f"Warning: Invalid return date format '{return_estimate}', treating as None")
+            return_estimate_date = None
 
     if injury_status in INJURY_STATUSES_OUT and (not return_estimate_date or game_date <= return_estimate_date):
-        #print(f"Player is {injury_status}, setting projection to 0 until {return_estimate}")
         return 0.0
     if injury_status == DAY_TO_DAY_STATUS and return_estimate_date and game_date <= return_estimate_date:
-        #print(f"Player is Day-To-Day, reducing projection to {DAY_TO_DAY_REDUCTION*100}% until {return_estimate}")
         return base_score * DAY_TO_DAY_REDUCTION
     return base_score
 
@@ -365,7 +338,7 @@ def process_hitter(conn, game_data, hitter_data, injuries, game_week_id):
     
     park_factors = {row[0]: row[1] / 100 for row in c.execute("SELECT factor_type, value FROM ParkFactors WHERE stadium_id = ?", (stadium_id,)).fetchall()}
     if not park_factors:
-        print(f"No park factors for stadium_id {stadium_id}, using default 1.0")
+        print(f"No park factors for stadium_id {stadium_id} for game https://www.mlb.com/gameday/{game_id}, using default 1.0")
         park_factors = {'R': 1.0, 'RBI': 1.0, 'H': 1.0, '2B': 1.0, '3B': 1.0, 'HR': 1.0, 'BB': 1.0, 'SO': 1.0, 'SB': 1.0, 'CS': 1.0, 'HBP': 1.0}
     
     base_stats = {
@@ -523,14 +496,16 @@ def calculate_adjustments(conn, start_date, end_date, game_week_id):
     conn.commit()
 
 # --- Main Function ---
+# Update main function
 def main(update_park_factors=False, update_rosters=False, specified_date=None):
     current_date = specified_date if specified_date else datetime.now().date()
-    start_date, end_date = determine_game_week(current_date)
+    game_week_id = determine_game_week(current_date)  # Use the utils function
+    start_date, end_date = game_week_id.split('_to_')  # Split the string for use
     print(f"Processing game week: {start_date} to {end_date}")
     conn = init_db()
     if update_park_factors:
         load_park_factors_from_csv(conn, 'park_data.csv')
-    game_week_id = get_schedule(conn, start_date, end_date)
+    game_week_id = get_schedule(conn, start_date, end_date)  # Still returns the same string
     fetch_weather_and_store(conn, start_date, end_date)
     populate_player_teams(conn, start_date, end_date, update_rosters=update_rosters)
     calculate_adjustments(conn, start_date, end_date, game_week_id)
@@ -539,8 +514,8 @@ def main(update_park_factors=False, update_rosters=False, specified_date=None):
     print(f"Game week ID: {game_week_id}")
 
 if __name__ == "__main__":
-    # main()
+     main()
     # Examples:
-    # main(update_park_factors=True)
-     main(update_rosters=True)
+    #main(update_park_factors=True)
+    #main(update_rosters=True)
     # main(specified_date=date(2025, 3, 27))
