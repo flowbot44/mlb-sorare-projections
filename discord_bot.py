@@ -53,7 +53,8 @@ async def on_ready():
     boost_2025="Boost value for 2025 cards (default: 5.0)",
     stack_boost="Boost value for stacking players from same team (default: 2.0)",
     energy_per_card="Energy cost per non-2025 card (default: 25)",
-    lineup_order="Custom lineup priority order (comma-separated list of lineup types)"
+    lineup_order="Custom lineup priority order (comma-separated list of lineup types)",
+    ignore_players="Comma-separated list of player NAMES to ignore (e.g., Shohei Ohtani, Mike Trout)"
 )
 async def slash_lineup(
     interaction: discord.Interaction, 
@@ -63,7 +64,8 @@ async def slash_lineup(
     boost_2025: float = None,
     stack_boost: float = None,
     energy_per_card: int = None,
-    lineup_order: str = None
+    lineup_order: str = None,
+    ignore_players: str = None
 ):
     """Fetch cards and generate a lineup for the given username with optional parameters."""
     await interaction.response.defer(thinking=True)  # Let user know we're working on it
@@ -77,7 +79,15 @@ async def slash_lineup(
     boost_2025_value = boost_2025 if boost_2025 is not None else BOOST_2025
     stack_boost_value = stack_boost if stack_boost is not None else STACK_BOOST
     energy_per_card_value = energy_per_card if energy_per_card is not None else ENERGY_PER_CARD
-    
+    ignore_list = []
+    if ignore_players:
+        try:
+            # Keep using names as provided by the user for now
+            ignore_list = [name.strip() for name in ignore_players.split(',') if name.strip()]
+            print(f"Ignoring players (case-insensitive): {ignore_list}") # Log ignored players
+        except Exception as e:
+            await interaction.followup.send(f"Warning: Error parsing ignore list: {str(e)}. Proceeding without ignoring.")
+            ignore_list = []
     # Parse custom lineup order if provided
     if lineup_order:
         try:
@@ -130,7 +140,8 @@ async def slash_lineup(
             energy_limits=energy_limits,
             boost_2025=boost_2025_value,
             stack_boost=stack_boost_value,
-            energy_per_card=energy_per_card_value
+            energy_per_card=energy_per_card_value,
+            ignore_list=ignore_list # Pass the list of names
         )
 
         # Step 4: Save lineups to a file
@@ -177,7 +188,7 @@ async def slash_update(interaction: discord.Interaction):
         injury_data = fetch_injury_data()
         if injury_data:
             update_database(injury_data)
-            await interaction.followup.send("Injury data updated successfully.")
+            await interaction.followup.send("Injury data updated successfully. Starting Projections...")
         else:
             await interaction.followup.send("Failed to fetch injury data.")
 
