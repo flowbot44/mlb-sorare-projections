@@ -214,14 +214,32 @@ def build_lineup(cards_df: pd.DataFrame, lineup_type: str, used_cards: Set[str],
     return {"cards": [], "slot_assignments": [], "projections": [], "projected_score": 0, "energy_used": {"rare": 0, "limited": 0}}
 
 def build_all_lineups(cards_df: pd.DataFrame, projections_df: pd.DataFrame, energy_limits: Dict[str, int],
-                     boost_2025: float, stack_boost: float, energy_per_card: int) -> Dict[str, Dict]:
+                     boost_2025: float, stack_boost: float, energy_per_card: int,
+                     ignore_list: List[str] = None) -> Dict[str, Dict]:
     """Build optimal lineups respecting global energy constraints."""
     check_missing_projections(cards_df, projections_df)
-    cards_df = cards_df.merge(projections_df, left_on="name", right_on="player_name", how="left").fillna({"total_projection": 0})
+
+    if ignore_list:
+        initial_count = len(cards_df)
+        # Convert the user-provided names to uppercase for comparison
+        ignore_list_upper = {name.upper() for name in ignore_list}
+        print(f"Uppercase ignore list: {ignore_list_upper}")
+
+        # Ensure the 'name' column in the DataFrame is uppercase (as stated in the user request)
+        # If it might not be, uncomment the line below:
+        # cards_df['name_upper'] = cards_df['name'].str.upper()
+
+        # Filter based on the 'name' column being in the uppercase ignore list.
+        # Assumes cards_df['name'] is already uppercase. If not, use cards_df['name_upper']
+        cards_df = cards_df[~cards_df['name'].isin(ignore_list_upper)]
+        filtered_count = len(cards_df)
+        print(f"Ignored {initial_count - filtered_count} cards based on case-insensitive name list: {ignore_list}")
     
+    cards_df = cards_df.merge(projections_df, left_on="name", right_on="player_name", how="left").fillna({"total_projection": 0}).infer_objects(copy=False)
+
     used_cards = set()
-    remaining_energy = energy_limits.copy()  # Track remaining energy globally
-    lineups = {key: {"cards": [], "slot_assignments": [], "projections": [], "projected_score": 0, "energy_used": {"rare": 0, "limited": 0}} 
+    remaining_energy = energy_limits.copy()
+    lineups = {key: {"cards": [], "slot_assignments": [], "projections": [], "projected_score": 0, "energy_used": {"rare": 0, "limited": 0}}
                for key in Config.PRIORITY_ORDER}
     
     # First, process all energy-using lineups
@@ -299,8 +317,11 @@ def parse_arguments():
                         help=f'Stack boost (default: {Config.STACK_BOOST})')
     parser.add_argument('--energy-per-card', type=int, default=Config.ENERGY_PER_NON_2025_CARD,
                         help=f'Energy cost per non-2025 card (default: {Config.ENERGY_PER_NON_2025_CARD})')
+    parser.add_argument('--ignore-players', type=str, default=None,
+                        help='Comma-separated list of player NAMES to ignore (case-insensitive)')
     parser.add_argument('--game-week', type=str, default=determine_game_week(),
                     help='Game week in format YYYY-MM-DD_to_YYYY-MM-DD (default: dynamically determined)')
+    
     return parser.parse_args()
 
 def main():
@@ -315,12 +336,16 @@ def main():
         print(f"2025 Card Boost: {args.boost_2025}")
         print(f"Stack Boost: {args.stack_boost}")
         print(f"Energy Per Non-2025 Card: {args.energy_per_card}")
-        
+        print(f"Players to Ignore for Lineups: {args.ignore_players}")
+        ignore_list = []
+        if args.ignore_players:
+            ignore_list = [name.strip() for name in args.ignore_players.split(',') if name.strip()]
+     
         cards_df = fetch_cards(args.username)
         projections_df = fetch_projections()
         lineups = build_all_lineups(
             cards_df, projections_df, energy_limits, 
-            args.boost_2025, args.stack_boost, args.energy_per_card
+            args.boost_2025, args.stack_boost, args.energy_per_card, ignore_list
         )
         output_file = os.path.join("lineups", f"{args.username}.txt")
         save_lineups(

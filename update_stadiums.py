@@ -29,28 +29,24 @@ STADIUM_DATA_VERIFIED = {
     3312: ("Target Field", 44.9817, -93.2775, 90, 0),
     2: ("Oriole Park at Camden Yards", 39.2839, -76.6217, 30, 0),
     2529: ("Sutter Health Park", 38.5798, -121.5148, 30, 0),
+    2394: ("Comerica Park", 42.3390, -83.0485, 150, 0),
+    3289: ("Citi Field", 40.7571, -73.8458, 15, 0),
+    2395: ("Oracle Park", 37.7786, -122.3893, 85, 0),
+    1: ("Angel Stadium", 33.8003, -117.8827, 45, 0),
+    19: ("Coors Field", 39.7559, -104.9942, 0, 0),
+    3: ("Fenway Park", 42.3467, -71.0972, 45, 0),
+    31: ("PNC Park", 40.4469, -80.0057, 115, 0),
+    17: ("Wrigley Field", 41.9484, -87.6553, 40, 0),
+    4705: ("Truist Park", 33.8908, -84.4682, 155, 0),
    
 }
 # Manually sourced lat/lon, orientation, and dome info for MLB stadiums
 STADIUM_DATA = {
-    5232: ("Angel Stadium", 33.8003, -117.8827, 45, 0),
-    23: ("Chase Field", 33.4455, -112.0667, 45, 1),
-    
-    3: ("Fenway Park", 42.3467, -71.0972, 45, 0),
-    7: ("Wrigley Field", 41.9484, -87.6553, 40, 0),
+
     5: ("Progressive Field", 41.4962, -81.6852, 0, 0),
-    19: ("Coors Field", 39.7559, -104.9942, 0, 0),
-    6: ("Comerica Park", 42.3390, -83.0485, 150, 0),
-    
-    
-    3289: ("Citi Field", 40.7571, -73.8458, 15, 0),
+
     13: ("Oakland Coliseum", 37.7516, -122.2005, 55, 0),
-    
-    17: ("PNC Park", 40.4469, -80.0057, 115, 0),
-    2395: ("Oracle Park", 37.7786, -122.3893, 85, 0),
-    11: ("T-Mobile Park", 47.5914, -122.3325, 90, 1),
     15: ("Tropicana Field", 27.7683, -82.6534, 100, 1),
-    4946: ("Truist Park", 33.8908, -84.4682, 155, 0),
 }
 
 DB_PATH = "mlb_sorare.db"  # Change if needed
