@@ -38,16 +38,14 @@ STADIUM_DATA_VERIFIED = {
     31: ("PNC Park", 40.4469, -80.0057, 115, 0),
     17: ("Wrigley Field", 41.9484, -87.6553, 40, 0),
     4705: ("Truist Park", 33.8908, -84.4682, 155, 0),
+    5: ("Progressive Field", 41.4962, -81.6852, 0, 0),
    
 }
 # Manually sourced lat/lon, orientation, and dome info for MLB stadiums
-STADIUM_DATA = {
-
-    5: ("Progressive Field", 41.4962, -81.6852, 0, 0),
-
-    13: ("Oakland Coliseum", 37.7516, -122.2005, 55, 0),
-    15: ("Tropicana Field", 27.7683, -82.6534, 100, 1),
-}
+#STADIUM_DATA = {
+#    13: ("Oakland Coliseum", 37.7516, -122.2005, 55, 0),
+#    15: ("Tropicana Field", 27.7683, -82.6534, 100, 1),
+#}
 
 DB_PATH = "mlb_sorare.db"  # Change if needed
 

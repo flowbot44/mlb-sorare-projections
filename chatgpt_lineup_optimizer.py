@@ -5,6 +5,7 @@ import os
 import argparse
 from typing import Dict, List, Set, Optional
 from utils import determine_game_week  # Import from utils
+from datetime import datetime, timedelta
 
 # Configuration Constants
 class Config:
@@ -290,6 +291,139 @@ def build_all_lineups(cards_df: pd.DataFrame, projections_df: pd.DataFrame, ener
     
     return lineups
 
+def generate_sealed_cards_report(username: str) -> str:
+    """
+    Generate a report of sealed cards with projections and injured players expected back during game week.
+    
+    Args:
+        username (str): Username to filter cards by
+        
+    Returns:
+        str: The formatted report as a string
+    """
+    report_content = []
+    db_path = Config.DB_PATH
+    
+    try:
+        # Connect to database
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        
+        # Get current date
+        current_date = datetime.now()
+        report_content.append(f"Sealed Cards Report generated on: {current_date.strftime('%Y-%m-%d')}")
+        report_content.append("=" * 80)
+        
+        # Get game week dates
+        game_week = Config.GAME_WEEK
+        try:
+            # Parse the game week to get start and end dates
+            start_date_str, end_date_str = game_week.split("_to_")
+            start_date = datetime.strptime(start_date_str, "%Y-%m-%d")
+            end_date = datetime.strptime(end_date_str, "%Y-%m-%d")
+        except:
+            # Fallback to 7 days if game week format is unexpected
+            start_date = current_date
+            end_date = current_date + timedelta(days=7)
+        
+        # Part 1: Sealed cards with projections (distinct cards with totaled projections)
+        report_content.append("\n## SEALED CARDS WITH UPCOMING PROJECTIONS (TOTALED) ##\n")
+        
+        query = """
+        SELECT c.slug, c.name, c.year, c.rarity, c.positions, 
+               COUNT(ap.game_id) as game_count, 
+               SUM(ap.sorare_score) as total_projected_score,
+               AVG(ap.sorare_score) as avg_projected_score,
+               MIN(ap.game_date) as next_game_date
+        FROM cards c
+        JOIN AdjustedProjections ap ON c.name = ap.player_name
+        WHERE c.username = ? AND c.sealed = 1 AND ap.game_date >= ?
+        GROUP BY c.slug, c.name, c.year, c.rarity, c.positions
+        ORDER BY next_game_date ASC
+        """
+        
+        cursor.execute(query, (username, current_date.strftime('%Y-%m-%d')))
+        projection_results = cursor.fetchall()
+        
+        if projection_results:
+            # Convert to DataFrame for better display
+            columns = ['Slug', 'Name', 'Year', 'Rarity', 'Positions', 
+                      'Upcoming Games', 'Total Projected Score', 'Avg Score/Game', 'Next Game Date']
+            df_projections = pd.DataFrame(projection_results, columns=columns)
+            
+            # Format the dataframe - round the scores to 2 decimal places
+            df_projections['Total Projected Score'] = df_projections['Total Projected Score'].round(2)
+            df_projections['Avg Score/Game'] = df_projections['Avg Score/Game'].round(2)
+            
+            report_content.append(f"Found {len(df_projections)} distinct sealed cards with upcoming projections:")
+            report_content.append(df_projections.to_string(index=False))
+        else:
+            report_content.append("No sealed cards with upcoming projections found.")
+        
+        # Part 2: Injured sealed cards expected back within game week
+        report_content.append("\n" + "=" * 80)
+        report_content.append(f"\n## INJURED SEALED CARDS RETURNING DURING GAME WEEK ({start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')}) ##\n")
+        
+        query = """
+        SELECT c.slug, c.name, c.year, c.rarity, c.positions, i.status, 
+               i.description, i.return_estimate, i.team
+        FROM cards c
+        JOIN injuries i ON c.name = i.player_name
+        WHERE c.username = ? AND c.sealed = 1 AND i.return_estimate IS NOT NULL
+        """
+        
+        cursor.execute(query, (username,))
+        injury_results = cursor.fetchall()
+        
+        if injury_results:
+            # Filter injuries with return dates within game week
+            soon_returning = []
+            
+            for result in injury_results:
+                return_estimate = result[7]
+                
+                # Check if return_estimate contains a date string
+                try:
+                    # Try different date formats
+                    for date_format in ['%Y-%m-%d', '%m/%d/%Y', '%d-%m-%Y', '%d/%m/%Y']:
+                        try:
+                            return_date = datetime.strptime(return_estimate, date_format)
+                            if start_date <= return_date <= end_date:
+                                soon_returning.append(result)
+                            break
+                        except ValueError:
+                            continue
+                except:
+                    # If return_estimate isn't a date, check if it contains keywords
+                    # suggesting imminent return during the game week
+                    keywords = ['day to day', 'game time decision', 'probable', 
+                               'questionable', 'today', 'tomorrow', '1-3 days',
+                               'this week', 'expected back', 'returning']
+                    if any(keyword in return_estimate.lower() for keyword in keywords):
+                        soon_returning.append(result)
+            
+            if soon_returning:
+                columns = ['Slug', 'Name', 'Year', 'Rarity', 'Positions', 'Status', 
+                          'Description', 'Return Estimate', 'Team']
+                df_injuries = pd.DataFrame(soon_returning, columns=columns)
+                
+                report_content.append(f"Found {len(df_injuries)} injured sealed cards expected to return during game week:")
+                report_content.append(df_injuries.to_string(index=False))
+            else:
+                report_content.append("No injured sealed cards expected to return during game week.")
+        else:
+            report_content.append("No injured sealed cards found.")
+        
+        report_content.append("\n" + "=" * 80)
+        conn.close()
+        
+    except sqlite3.Error as e:
+        report_content.append(f"Database error: {e}")
+    except Exception as e:
+        report_content.append(f"Error: {e}")
+        
+    return "\n".join(report_content)
+
 def save_lineups(lineups: Dict[str, Dict], output_file: str, energy_limits: Dict[str, int],
                 username: str, boost_2025: float, stack_boost: float, energy_per_card: int) -> None:
     """Save lineups to a file with energy usage and print remaining energy."""
@@ -323,6 +457,15 @@ def save_lineups(lineups: Dict[str, Dict], output_file: str, energy_limits: Dict
         f.write(f"Energy Summary:\n")
         f.write(f"Total Rare Energy Used: {total_energy_used['rare']}/{energy_limits['rare']} (Remaining: {remaining_rare})\n")
         f.write(f"Total Limited Energy Used: {total_energy_used['limited']}/{energy_limits['limited']} (Remaining: {remaining_limited})\n")
+        
+        # Add sealed cards report at the bottom
+        f.write("\n\n" + "=" * 50 + "\n")
+        f.write("SEALED CARDS REPORT\n")
+        f.write("=" * 50 + "\n")
+        
+        # Generate and add the sealed cards report
+        sealed_report = generate_sealed_cards_report(username)
+        f.write(sealed_report)
 
 def parse_arguments():
     """Parse command line arguments with sensible defaults."""
