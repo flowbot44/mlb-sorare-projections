@@ -59,15 +59,31 @@ def fetch_cards(username: str) -> pd.DataFrame:
         cards_df = pd.read_sql(query, conn, params=(username,))
         cards_df["year"] = cards_df["year"].astype(int)
         cards_df.loc[cards_df["name"] == Config.SHOHEI_NAME, "positions"] = "baseball_designated_hitter"
+    
+        # Add debug info for players with same name but different teams
+        # Convert team_id to integer if it's coming back as float
+        if 'team_id' in cards_df.columns:
+            cards_df['team_id'] = cards_df['team_id'].fillna(-1).astype(int)
+            
+        # Better check for players with same name but different teams
+        name_groups = cards_df.groupby("name")["team_id"].nunique()
+        multi_team_players = name_groups[name_groups > 1].index.tolist()
+        
+        if multi_team_players:
+            print("Note: Found players who truly appear on multiple teams:")
+            for name in multi_team_players:
+                teams = cards_df[cards_df["name"] == name]["team_id"].unique()
+                print(f"  - {name}: Teams {teams}")
+
     return cards_df
 
 def fetch_projections() -> pd.DataFrame:
-    """Fetch Sorare projections for the current game week."""
+    """Fetch Sorare projections for the current game week with team separation."""
     with get_db_connection() as conn:
         query = """
-            SELECT player_name, SUM(sorare_score) AS total_projection 
+            SELECT player_name, team_id, SUM(sorare_score) AS total_projection 
             FROM AdjustedProjections WHERE game_week = ?
-            GROUP BY player_name
+            GROUP BY player_name, team_id
         """
         projections_df = pd.read_sql(query, conn, params=(Config.GAME_WEEK,))
         projections_df["total_projection"] = projections_df["total_projection"].fillna(0).infer_objects(copy=False)
@@ -132,7 +148,7 @@ def build_lineup(cards_df: pd.DataFrame, lineup_type: str, used_cards: Set[str],
     lineup = []
     slot_assignments = []
     projections = []
-    used_players = set()
+    used_players = set()  # This will now store (name, team_id) tuples
     rarity_count = {"common": 0, "limited": 0, "rare": 0}
     team_counts = {}
     energy_used = {"rare": 0, "limited": 0}
@@ -150,8 +166,9 @@ def build_lineup(cards_df: pd.DataFrame, lineup_type: str, used_cards: Set[str],
             return {"cards": [], "slot_assignments": [], "projections": [], "projected_score": 0, "energy_used": {"rare": 0, "limited": 0}}
     
     for slot in Config.LINEUP_SLOTS:
+        # Update this line to check name-team combination
         candidates = available_cards[
-            available_cards["name"].apply(lambda x: x not in used_players) &
+            available_cards.apply(lambda x: (x["name"], x["team_id"]) not in used_players, axis=1) &
             available_cards["positions"].apply(lambda p: can_fill_position(p, slot))
         ].copy()
         
@@ -190,7 +207,7 @@ def build_lineup(cards_df: pd.DataFrame, lineup_type: str, used_cards: Set[str],
         lineup.append(selected_card["slug"])
         slot_assignments.append(slot)
         projections.append(selected_card["total_projection"])
-        used_players.add(selected_card["name"])
+        used_players.add((selected_card["name"], selected_card["team_id"]))
         rarity_count[selected_card["rarity"]] += 1
         
         # Update energy used tracking
@@ -235,8 +252,13 @@ def build_all_lineups(cards_df: pd.DataFrame, projections_df: pd.DataFrame, ener
         filtered_count = len(cards_df)
         print(f"Ignored {initial_count - filtered_count} cards based on case-insensitive name list: {ignore_list}")
     
-    cards_df = cards_df.merge(projections_df, left_on="name", right_on="player_name", how="left").fillna({"total_projection": 0}).infer_objects(copy=False)
-
+    cards_df = cards_df.merge(
+        projections_df, 
+        left_on=["name", "team_id"], 
+        right_on=["player_name", "team_id"], 
+        how="left"
+    ).fillna({"total_projection": 0}).infer_objects(copy=False)
+    
     used_cards = set()
     remaining_energy = energy_limits.copy()
     lineups = {key: {"cards": [], "slot_assignments": [], "projections": [], "projected_score": 0, "energy_used": {"rare": 0, "limited": 0}}

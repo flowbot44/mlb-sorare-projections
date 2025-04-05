@@ -36,7 +36,7 @@ def init_db(db_path='mlb_sorare.db'):
     c.execute('DROP TABLE IF EXISTS AdjustedProjections')
     c.execute('''CREATE TABLE IF NOT EXISTS AdjustedProjections 
                  (id INTEGER PRIMARY KEY AUTOINCREMENT, player_name TEXT, game_id INTEGER, 
-                  game_date TEXT, sorare_score REAL, game_week TEXT)''')
+                  game_date TEXT, sorare_score REAL, team_id INTEGER, game_week TEXT)''')
     c.execute('DROP TABLE IF EXISTS PlayerTeams')
     c.execute('''CREATE TABLE IF NOT EXISTS PlayerTeams 
                  (id INTEGER PRIMARY KEY AUTOINCREMENT, player_id TEXT, 
@@ -311,8 +311,8 @@ def adjust_stats(stats, park_factors, is_dome, orientation, wind_dir, wind_speed
     return adjusted_stats
 
 def process_hitter(conn, game_data, hitter_data, injuries, game_week_id):
-    """Process a single hitter's projection."""
-    game_id, game_date, time, stadium_id = game_data[:4]  # Corrected to include time and get stadium_id
+    """Process a single hitter's projection with team-specific identification."""
+    game_id, game_date, time, stadium_id, home_team_id, away_team_id = game_data[:6]
     game_date_obj = datetime.strptime(game_date, '%Y-%m-%d').date()
     
     player_name = normalize_name(hitter_data.get("Name"))
@@ -320,7 +320,15 @@ def process_hitter(conn, game_data, hitter_data, injuries, game_week_id):
         print(f"Warning: Null Name for hitter in game {game_id}")
         return
     
-    #print(f"Processing hitter: {player_name}, Game ID: {game_id}, Stadium ID: {stadium_id}")
+    # Get the team ID for this player
+    player_team_id = hitter_data.get("TeamID")
+    
+    # Only process hitters who belong to one of the teams playing in this game
+    if player_team_id not in (home_team_id, away_team_id):
+        return
+    
+    # Create a unique player identifier with name and team
+    unique_player_key = f"{player_name}_{player_team_id}"
     
     c = conn.cursor()
     stadium_data = c.execute("""
@@ -341,36 +349,99 @@ def process_hitter(conn, game_data, hitter_data, injuries, game_week_id):
         print(f"No park factors for stadium_id {stadium_id} for game https://www.mlb.com/gameday/{game_id}, using default 1.0")
         park_factors = {'R': 1.0, 'RBI': 1.0, 'H': 1.0, '2B': 1.0, '3B': 1.0, 'HR': 1.0, 'BB': 1.0, 'SO': 1.0, 'SB': 1.0, 'CS': 1.0, 'HBP': 1.0}
     
+    # Process per-game stats directly from hitters_per_game table
     base_stats = {
-        'R': hitter_data.get('R', 0), 'RBI': hitter_data.get('RBI', 0), 'H': hitter_data.get('H', 0),
-        '2B': hitter_data.get('2B', 0), '3B': hitter_data.get('3B', 0), 'HR': hitter_data.get('HR', 0),
-        'BB': hitter_data.get('BB', 0), 'SO': hitter_data.get('SO', 0), 'SB': hitter_data.get('SB', 0),
-        'CS': hitter_data.get('CS', 0), 'HBP': hitter_data.get('HBP', 0)
+        'R': hitter_data.get('R_per_game', 0),
+        'RBI': hitter_data.get('RBI_per_game', 0),
+        'H': hitter_data.get('H', 0),  # Need to calculate this from singles, doubles, triples, HRs
+        '2B': hitter_data.get('2B_per_game', 0),
+        '3B': hitter_data.get('3B_per_game', 0),
+        'HR': hitter_data.get('HR_per_game', 0),
+        'BB': hitter_data.get('BB_per_game', 0),
+        'SO': hitter_data.get('K_per_game', 0),
+        'SB': hitter_data.get('SB_per_game', 0),
+        'CS': hitter_data.get('CS_per_game', 0),
+        'HBP': hitter_data.get('HBP_per_game', 0)
     }
+    
+    # Calculate H if not directly available
+    if 'H' not in base_stats or base_stats['H'] == 0:
+        singles = hitter_data.get('1B_per_game', 0)
+        base_stats['H'] = singles + base_stats['2B'] + base_stats['3B'] + base_stats['HR']
+    
     adjusted_stats = adjust_stats(base_stats, park_factors, is_dome, orientation, wind_dir, wind_speed, temp)
     base_score = calculate_sorare_hitter_score(adjusted_stats, SCORING_MATRIX)
-    final_score = adjust_score_for_injury(base_score, injuries.get(player_name, {'status': 'Active', 'return_estimate': None})['status'], 
-                                          injuries.get(player_name, {'status': 'Active', 'return_estimate': None})['return_estimate'], game_date_obj)
     
-    c.execute("INSERT INTO AdjustedProjections (player_name, game_id, game_date, sorare_score, game_week) VALUES (?, ?, ?, ?, ?)",
-              (player_name, game_id, game_date, final_score, game_week_id))
+    # Try to find injury data with the unique key first, then fall back to just the name
+    injury_data = injuries.get(unique_player_key, injuries.get(player_name, {'status': 'Active', 'return_estimate': None}))
+    final_score = adjust_score_for_injury(base_score, injury_data['status'], injury_data['return_estimate'], game_date_obj)
     
-def process_pitcher(conn, game_data, pitcher_data, injuries, game_week_id, is_starter=False, processed_pitchers=None):
-    """Process a single pitcher's projection (starter or reliever)."""
-    if is_starter:
-        game_id, game_date, time, stadium_id = game_data[:4]  # Corrected for starters
+    # Check if this player already has a projection for this game
+    existing = c.execute("""
+        SELECT id FROM AdjustedProjections 
+        WHERE player_name = ? AND game_id = ? AND team_id = ?
+    """, (player_name, game_id, player_team_id)).fetchone()
+    
+    if existing:
+        c.execute("""
+            UPDATE AdjustedProjections 
+            SET sorare_score = ? 
+            WHERE player_name = ? AND game_id = ? AND team_id = ?
+        """, (final_score, player_name, game_id, player_team_id))
     else:
-        game_id, stadium_id, game_date = game_data  # Relievers unchanged
+        c.execute("""
+            INSERT INTO AdjustedProjections 
+            (player_name, game_id, game_date, sorare_score, game_week, team_id) 
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (player_name, game_id, game_date, final_score, game_week_id, player_team_id))
+
+def process_pitcher(conn, game_data, pitcher_data, injuries, game_week_id, is_starter=False):
+    """Process a single pitcher's projection with team-specific identification."""
+    game_id, game_date, time, stadium_id, home_team_id, away_team_id = game_data[:6]
     game_date_obj = datetime.strptime(game_date, '%Y-%m-%d').date()
     
     player_name = normalize_name(pitcher_data.get("Name"))
-    player_id = pitcher_data.get("player_id")
-    if not player_name or (is_starter and not player_id):
-        print(f"Warning: Null Name or ID for pitcher in game {game_id}")
+    if not player_name:
+        print(f"Warning: Null Name for pitcher in game {game_id}")
         return
     
-    if is_starter and processed_pitchers is not None:
-        processed_pitchers.add(player_id)
+    # Get the team ID for this player
+    player_team_id = pitcher_data.get("TeamID")
+    
+    # Only process pitchers who belong to one of the teams playing in this game
+    if player_team_id not in (home_team_id, away_team_id):
+        return
+    
+    # Create a unique player identifier with name and team
+    unique_player_key = f"{player_name}_{player_team_id}"
+    
+    # Determine if pitcher is generally a starter (projects to 3+ innings per game)
+    innings_per_game = pitcher_data.get('IP_per_game', 0)
+    is_generally_starter = innings_per_game >= 3.0
+    
+    # If pitcher is generally a starter but not starting in this game, set score to 0
+    if is_generally_starter and not is_starter:
+        c = conn.cursor()
+        
+        # Check if this player already has a projection for this game
+        existing = c.execute("""
+            SELECT id FROM AdjustedProjections 
+            WHERE player_name = ? AND game_id = ? AND team_id = ?
+        """, (player_name, game_id, player_team_id)).fetchone()
+        
+        if existing:
+            c.execute("""
+                UPDATE AdjustedProjections 
+                SET sorare_score = 0.0 
+                WHERE player_name = ? AND game_id = ? AND team_id = ?
+            """, (player_name, game_id, player_team_id))
+        else:
+            c.execute("""
+                INSERT INTO AdjustedProjections 
+                (player_name, game_id, game_date, sorare_score, game_week, team_id) 
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (player_name, game_id, game_date, 0.0, game_week_id, player_team_id))
+        return
     
     c = conn.cursor()
     stadium_data = c.execute("""
@@ -392,23 +463,43 @@ def process_pitcher(conn, game_data, pitcher_data, injuries, game_week_id, is_st
         park_factors = {'IP': 1.0, 'SO': 1.0, 'H': 1.0, 'ER': 1.0, 'BB': 1.0, 'HBP': 1.0, 'W': 1.0, 'SV': 1.0}
     
     base_stats = {
-        'IP': pitcher_data.get('IP', 0), 'SO': pitcher_data.get('SO', 0), 'H': pitcher_data.get('H', 0),
-        'ER': pitcher_data.get('ER', 0), 'BB': pitcher_data.get('BB', 0), 'HBP': pitcher_data.get('HBP', 0),
-        'W': pitcher_data.get('W', 0), 'SV': pitcher_data.get('SV', 0)
+        'IP': innings_per_game,
+        'SO': pitcher_data.get('K_per_game', 0),
+        'H': pitcher_data.get('H_per_game', 0),
+        'ER': pitcher_data.get('ER_per_game', 0),
+        'BB': pitcher_data.get('BB_per_game', 0),
+        'HBP': pitcher_data.get('HBP_per_game', 0),
+        'W': pitcher_data.get('W_per_game', 0),
+        'SV': pitcher_data.get('S_per_game', 0)
     }
+    
     adjusted_stats = adjust_stats(base_stats, park_factors, is_dome, orientation, wind_dir, wind_speed, temp, is_pitcher=True)
-    if is_starter:
-        adjusted_stats['W'] = base_stats['W'] / 30
-        adjusted_stats['SV'] = 0
+    base_score = calculate_sorare_pitcher_score(adjusted_stats, SCORING_MATRIX)
+    
+    # Try to find injury data with the unique key first, then fall back to just the name
+    injury_data = injuries.get(unique_player_key, injuries.get(player_name, {'status': 'Active', 'return_estimate': None}))
+    final_score = adjust_score_for_injury(base_score, injury_data['status'], injury_data['return_estimate'], game_date_obj)
+    
+    # Check if this player already has a projection for this game
+    existing = c.execute("""
+        SELECT id FROM AdjustedProjections 
+        WHERE player_name = ? AND game_id = ? AND team_id = ?
+    """, (player_name, game_id, player_team_id)).fetchone()
+    
+    if existing:
+        c.execute("""
+            UPDATE AdjustedProjections 
+            SET sorare_score = ? 
+            WHERE player_name = ? AND game_id = ? AND team_id = ?
+        """, (final_score, player_name, game_id, player_team_id))
     else:
-        adjusted_stats['W'] = 0
-    base_score = calculate_sorare_pitcher_score(adjusted_stats, SCORING_MATRIX) * (5 if is_starter else 1)
-    final_score = adjust_score_for_injury(base_score, injuries.get(player_name, {'status': 'Active', 'return_estimate': None})['status'], 
-                                          injuries.get(player_name, {'status': 'Active', 'return_estimate': None})['return_estimate'], game_date_obj)
-    
-    c.execute("INSERT INTO AdjustedProjections (player_name, game_id, game_date, sorare_score, game_week) VALUES (?, ?, ?, ?, ?)",
-              (player_name, game_id, game_date, final_score, game_week_id))
-    
+        c.execute("""
+            INSERT INTO AdjustedProjections 
+            (player_name, game_id, game_date, sorare_score, game_week, team_id) 
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (player_name, game_id, game_date, final_score, game_week_id, player_team_id))
+
+# --- Updates to the main functions ---
 def calculate_adjustments(conn, start_date, end_date, game_week_id):
     if not isinstance(start_date, str):
         start_date = start_date.strftime('%Y-%m-%d')
@@ -418,85 +509,161 @@ def calculate_adjustments(conn, start_date, end_date, game_week_id):
     c = conn.cursor()
     c.execute("DELETE FROM AdjustedProjections WHERE game_week = ?", (game_week_id,))
     
-    injuries = {row[0]: {'status': row[1], 'return_estimate': row[2]} 
+    # Create a more specific injury lookup that includes team_id
+    basic_injuries = {row[0]: {'status': row[1], 'return_estimate': row[2]} 
                 for row in c.execute("SELECT player_name, status, return_estimate FROM injuries").fetchall()}
+    
+    # Create a version with team-specific keys for players
+    injuries = {}
+    for player_name, injury_data in basic_injuries.items():
+        # First, keep the name-only version for backward compatibility
+        injuries[player_name] = injury_data
+        
+        # Add team-specific entries
+        team_results = c.execute("SELECT team_id FROM PlayerTeams WHERE player_name = ?", (player_name,)).fetchall()
+        for team_result in team_results:
+            team_id = team_result[0]
+            unique_key = f"{player_name}_{team_id}"
+            injuries[unique_key] = injury_data
     
     games = c.execute("""
         SELECT id, date, time, stadium_id, home_team_id, away_team_id, home_probable_pitcher_id, away_probable_pitcher_id 
         FROM Games WHERE date BETWEEN ? AND ?
     """, (start_date, end_date)).fetchall()
     
-    processed_pitchers = set()
-    
-    # Process hitters and starters
-    for game in games:
+    # First, lookup the names of the probable pitchers
+    for i, game in enumerate(games):
         game_id, game_date, time, stadium_id, home_team_id, away_team_id, home_pitcher_id, away_pitcher_id = game
-        participating_team_ids = (home_team_id, away_team_id)
         
-        # Hitters
-        hitters = c.execute("""
-            SELECT h.* FROM hitters_per_game h 
+        # Get pitcher names if IDs exist
+        home_pitcher_name = None
+        away_pitcher_name = None
+        
+        if home_pitcher_id:
+            home_pitcher_result = c.execute("""
+                SELECT player_name FROM PlayerTeams
+                WHERE player_id = ?
+            """, (home_pitcher_id,)).fetchone()
+            
+            if home_pitcher_result:
+                home_pitcher_name = normalize_name(home_pitcher_result[0])
+        
+        if away_pitcher_id:
+            away_pitcher_result = c.execute("""
+                SELECT player_name FROM PlayerTeams
+                WHERE player_id = ?
+            """, (away_pitcher_id,)).fetchone()
+            
+            if away_pitcher_result:
+                away_pitcher_name = normalize_name(away_pitcher_result[0])
+        
+        # Update the games tuple with the pitcher names
+        games[i] = game + (home_pitcher_name, away_pitcher_name)
+    
+    # Process hitters for each game
+    for game in games:
+        game_id, game_date, time, stadium_id, home_team_id, away_team_id, home_pitcher_id, away_pitcher_id, home_pitcher_name, away_pitcher_name = game
+        
+        # Pass first 6 elements of game tuple (includes team IDs)
+        game_data = game[:6]
+        
+        # Process home team hitters
+        home_hitters = c.execute("""
+            SELECT h.*, pt.team_id as TeamID, pt.player_id 
+            FROM hitters_per_game h
             JOIN PlayerTeams pt ON h.Name = pt.player_name 
-            WHERE pt.team_id IN (?, ?)
-        """, participating_team_ids).fetchall()
+            WHERE pt.team_id = ?
+        """, (home_team_id,)).fetchall()
+        
+        # Process away team hitters
+        away_hitters = c.execute("""
+            SELECT h.*, pt.team_id as TeamID, pt.player_id 
+            FROM hitters_per_game h
+            JOIN PlayerTeams pt ON h.Name = pt.player_name 
+            WHERE pt.team_id = ?
+        """, (away_team_id,)).fetchall()
+        
+        # Combine home and away hitters
+        hitters = home_hitters + away_hitters
         hitter_columns = [col[0] for col in c.description]
+        
         for hitter in hitters:
             hitter_dict = {hitter_columns[i]: hitter[i] for i in range(len(hitter_columns))}
-            process_hitter(conn, game, hitter_dict, injuries, game_week_id)
+            process_hitter(conn, game_data, hitter_dict, injuries, game_week_id)
         
-        # Starters
-        safe_home_pitcher_id = home_pitcher_id if home_pitcher_id else ""
-        safe_away_pitcher_id = away_pitcher_id if away_pitcher_id else ""
-        probable_starters = c.execute("""
-            SELECT p.*, pt.player_id 
-            FROM pitchers_per_unit p 
+        # Process home team pitchers
+        home_pitchers = c.execute("""
+            SELECT p.*, pt.team_id as TeamID, pt.player_id 
+            FROM pitchers_per_game p 
             JOIN PlayerTeams pt ON p.Name = pt.player_name 
-            WHERE pt.player_id IN (?, ?) AND pt.team_id IN (?, ?)
-        """, (safe_home_pitcher_id, safe_away_pitcher_id, home_team_id, away_team_id)).fetchall()
-        pitcher_columns = [col[0] for col in c.description]
+            WHERE pt.team_id = ?
+        """, (home_team_id,)).fetchall()
         
-        if not probable_starters and (home_pitcher_id or away_pitcher_id):  # If we expect pitchers but get none
-            print(f"Warning: No starting pitcher data found for game {game_id} on {game_date} (Home ID: {home_pitcher_id}, Away ID: {away_pitcher_id})")
-        elif not home_pitcher_id and not away_pitcher_id:
-            print(f"Warning: No probable pitcher IDs provided for game {game_id} on {game_date}")
-        
-        for pitcher in probable_starters:
-            pitcher_dict = {pitcher_columns[i]: pitcher[i] for i in range(len(pitcher_columns))}
-            process_pitcher(conn, game, pitcher_dict, injuries, game_week_id, is_starter=True, processed_pitchers=processed_pitchers)
-    
-    # Process relief pitchers
-    team_ids = [team[0] for team in c.execute("""
-        SELECT DISTINCT home_team_id as team_id FROM Games WHERE date BETWEEN ? AND ?
-        UNION
-        SELECT DISTINCT away_team_id as team_id FROM Games WHERE date BETWEEN ? AND ?
-    """, (start_date, end_date, start_date, end_date)).fetchall()]
-    
-    probable_starter_ids = {game[6] for game in games if game[6]} | {game[7] for game in games if game[7]}
-    
-    for team_id in team_ids:
-        relief_pitchers = c.execute("""
-            SELECT p.*, pt.player_id 
-            FROM pitchers_per_unit p 
+        # Process away team pitchers
+        away_pitchers = c.execute("""
+            SELECT p.*, pt.team_id as TeamID, pt.player_id 
+            FROM pitchers_per_game p 
             JOIN PlayerTeams pt ON p.Name = pt.player_name 
-            WHERE pt.team_id = ? AND pt.player_id NOT IN ({})
-        """.format(','.join(['?' for _ in probable_starter_ids]) if probable_starter_ids else "'dummy'"), 
-        [team_id] + list(probable_starter_ids) if probable_starter_ids else [team_id]).fetchall()
-        pitcher_columns = [col[0] for col in c.description]
+            WHERE pt.team_id = ?
+        """, (away_team_id,)).fetchall()
         
-        for pitcher in relief_pitchers:
+        # Combine home and away pitchers
+        pitchers = home_pitchers + away_pitchers
+        pitcher_columns = [col[0] for col in c.description]
+
+        for pitcher in pitchers:
             pitcher_dict = {pitcher_columns[i]: pitcher[i] for i in range(len(pitcher_columns))}
-            if pitcher_dict.get("player_id") not in processed_pitchers:
-                team_games = c.execute("""
-                    SELECT id, stadium_id, date FROM Games 
-                    WHERE (home_team_id = ? OR away_team_id = ?) AND date BETWEEN ? AND ?
-                """, (team_id, team_id, start_date, end_date)).fetchall()
-                for team_game in team_games:
-                    process_pitcher(conn, team_game, pitcher_dict, injuries, game_week_id)
+            player_name = normalize_name(pitcher_dict.get("Name", ""))
+            
+            # Check if this pitcher is a probable starter for this game by NAME
+            is_starter = False
+            if home_pitcher_name and player_name == home_pitcher_name:
+                is_starter = True
+            elif away_pitcher_name and player_name == away_pitcher_name:
+                is_starter = True
+                
+            process_pitcher(conn, game_data, pitcher_dict, injuries, game_week_id, is_starter=is_starter)
     
     conn.commit()
 
+# --- Main Function with the fix incorporated ---
+def main(update_park_factors=False, update_rosters=False, specified_date=None):
+    current_date = specified_date if specified_date else datetime.now().date()
+    game_week_id = determine_game_week(current_date)
+    start_date, end_date = game_week_id.split('_to_')
+    print(f"Processing game week: {start_date} to {end_date}")
+    
+    conn = init_db()
+    
+    # Ensure team_id column exists in AdjustedProjections
+    update_db_schema(conn)
+    
+    if update_park_factors:
+        load_park_factors_from_csv(conn, 'park_data.csv')
+    
+    game_week_id = get_schedule(conn, start_date, end_date)
+    fetch_weather_and_store(conn, start_date, end_date)
+    populate_player_teams(conn, start_date, end_date, update_rosters=update_rosters)
+    calculate_adjustments(conn, start_date, end_date, game_week_id)
+    
+    # Verify the fix by checking for Max Muncy duplicates
+    c = conn.cursor()
+    muncy_rows = c.execute("""
+        SELECT id, player_name, game_id, game_date, sorare_score, team_id
+        FROM AdjustedProjections 
+        WHERE player_name = 'MAX MUNCY' AND game_week = ?
+        ORDER BY game_date, team_id
+    """, (game_week_id,)).fetchall()
+    
+    print(f"After fix - Max Muncy entries: {len(muncy_rows)}")
+    for row in muncy_rows:
+        print(row)
+    
+    conn.close()
+    print(f"Projections adjusted for game week: {start_date} to {end_date}")
+    print(f"Game week ID: {game_week_id}")
+
 # --- Main Function ---
-# Update main function
 def main(update_park_factors=False, update_rosters=False, specified_date=None):
     current_date = specified_date if specified_date else datetime.now().date()
     game_week_id = determine_game_week(current_date)  # Use the utils function
