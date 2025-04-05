@@ -625,44 +625,6 @@ def calculate_adjustments(conn, start_date, end_date, game_week_id):
             process_pitcher(conn, game_data, pitcher_dict, injuries, game_week_id, is_starter=is_starter)
     
     conn.commit()
-
-# --- Main Function with the fix incorporated ---
-def main(update_park_factors=False, update_rosters=False, specified_date=None):
-    current_date = specified_date if specified_date else datetime.now().date()
-    game_week_id = determine_game_week(current_date)
-    start_date, end_date = game_week_id.split('_to_')
-    print(f"Processing game week: {start_date} to {end_date}")
-    
-    conn = init_db()
-    
-    # Ensure team_id column exists in AdjustedProjections
-    update_db_schema(conn)
-    
-    if update_park_factors:
-        load_park_factors_from_csv(conn, 'park_data.csv')
-    
-    game_week_id = get_schedule(conn, start_date, end_date)
-    fetch_weather_and_store(conn, start_date, end_date)
-    populate_player_teams(conn, start_date, end_date, update_rosters=update_rosters)
-    calculate_adjustments(conn, start_date, end_date, game_week_id)
-    
-    # Verify the fix by checking for Max Muncy duplicates
-    c = conn.cursor()
-    muncy_rows = c.execute("""
-        SELECT id, player_name, game_id, game_date, sorare_score, team_id
-        FROM AdjustedProjections 
-        WHERE player_name = 'MAX MUNCY' AND game_week = ?
-        ORDER BY game_date, team_id
-    """, (game_week_id,)).fetchall()
-    
-    print(f"After fix - Max Muncy entries: {len(muncy_rows)}")
-    for row in muncy_rows:
-        print(row)
-    
-    conn.close()
-    print(f"Projections adjusted for game week: {start_date} to {end_date}")
-    print(f"Game week ID: {game_week_id}")
-
 # --- Main Function ---
 def main(update_park_factors=False, update_rosters=False, specified_date=None):
     current_date = specified_date if specified_date else datetime.now().date()
@@ -681,7 +643,7 @@ def main(update_park_factors=False, update_rosters=False, specified_date=None):
     print(f"Game week ID: {game_week_id}")
 
 if __name__ == "__main__":
-     main()
+    main()
     # Examples:
     #main(update_park_factors=True)
     #main(update_rosters=True)
