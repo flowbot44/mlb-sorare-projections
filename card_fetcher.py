@@ -107,7 +107,7 @@ class SorareMLBClient:
         
         conn = sqlite3.connect('mlb_sorare.db')
         cursor = conn.cursor()
-        cursor.execute("DELETE FROM cards WHERE username = ?", (username,))  
+        
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS cards (
                 slug TEXT PRIMARY KEY, 
@@ -120,6 +120,8 @@ class SorareMLBClient:
                 sealed BOOLEAN DEFAULT 0
             )
         ''')
+
+        cursor.execute("DELETE FROM cards WHERE username = ?", (username,))  
         
         for card in formatted_cards:
             #print(f"Inserting card: {card['name']} ({card['slug']})")
