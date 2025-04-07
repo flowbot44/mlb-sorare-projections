@@ -21,7 +21,7 @@ class Config:
         "Rare Champion",
         "Rare All-Star_1", "Rare All-Star_2", "Rare All-Star_3",
         "Rare Challenger_1", "Rare Challenger_2",
-        "Limited All-Star_1", 
+        "Limited All-Star_1", "Limited All-Star_2", "Limited All-Star_3",
         "Limited Challenger_1", "Limited Challenger_2",
         "Common Minors"
     ]
@@ -425,7 +425,8 @@ def generate_sealed_cards_report(username: str) -> str:
     return "\n".join(report_content)
 
 def save_lineups(lineups: Dict[str, Dict], output_file: str, energy_limits: Dict[str, int],
-                username: str, boost_2025: float, stack_boost: float, energy_per_card: int) -> None:
+                username: str, boost_2025: float, stack_boost: float, energy_per_card: int,
+                cards_df: pd.DataFrame, projections_df: pd.DataFrame) -> None:
     """Save lineups to a file with energy usage and print remaining energy."""
     os.makedirs(os.path.dirname(output_file), exist_ok=True)
     with open(output_file, "w") as f:
@@ -435,6 +436,9 @@ def save_lineups(lineups: Dict[str, Dict], output_file: str, energy_limits: Dict
         f.write(f"Stack Boost: {stack_boost}\n")
         f.write(f"Energy Per Non-2025 Card: {energy_per_card}\n")
         f.write("=" * 50 + "\n\n")
+        
+        
+        
         total_energy_used = {"rare": 0, "limited": 0}
         
         # Print lineups in priority order
@@ -462,6 +466,19 @@ def save_lineups(lineups: Dict[str, Dict], output_file: str, energy_limits: Dict
         f.write("\n\n" + "=" * 50 + "\n")
         f.write("SEALED CARDS REPORT\n")
         f.write("=" * 50 + "\n")
+
+        # Add missing projections information
+        f.write("PLAYERS LACKING PROJECTIONS\n")
+        f.write("=" * 50 + "\n")
+        merged = cards_df.merge(projections_df, left_on="name", right_on="player_name", how="left")
+        missing = merged[merged["total_projection"].isna()]
+        if not missing.empty:
+            f.write("The following players lack projections:\n")
+            for _, row in missing.iterrows():
+                f.write(f"  - {row['name']} (slug: {row['slug']})\n")
+        else:
+            f.write("All players have projections. Great!\n")
+        f.write("\n" + "=" * 50 + "\n\n")
         
         # Generate and add the sealed cards report
         sealed_report = generate_sealed_cards_report(username)
@@ -515,7 +532,8 @@ def main():
         output_file = os.path.join("lineups", f"{args.username}.txt")
         save_lineups(
             lineups, output_file, energy_limits, args.username, 
-            args.boost_2025, args.stack_boost, args.energy_per_card
+            args.boost_2025, args.stack_boost, args.energy_per_card,
+            cards_df, projections_df  # Pass the dataframes
         )
         print(f"Lineups saved to {output_file}")
     except Exception as e:
