@@ -29,7 +29,7 @@ DEFAULT_LINEUP_ORDER = [
     "Rare Champion",
     "Rare All-Star_1", "Rare All-Star_2", "Rare All-Star_3",
     "Rare Challenger_1", "Rare Challenger_2",
-    "Limited All-Star_1", 
+    "Limited All-Star_1", "Limited All-Star_2", "Limited All-Star_3",
     "Limited Challenger_1", "Limited Challenger_2",
     "Common Minors"
 ]
@@ -153,7 +153,9 @@ async def slash_lineup(
             username=username,
             boost_2025=boost_2025_value,
             stack_boost=stack_boost_value,
-            energy_per_card=energy_per_card_value
+            energy_per_card=energy_per_card_value,
+            cards_df=cards_df,             
+            projections_df=projections_df  
         )
 
         # Create a summary of parameters used
