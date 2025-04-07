@@ -1,0 +1,6 @@
+pandas
+requests
+ortools
+discord.py
+python-dotenv
+pytz

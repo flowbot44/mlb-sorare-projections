@@ -462,10 +462,6 @@ def save_lineups(lineups: Dict[str, Dict], output_file: str, energy_limits: Dict
         f.write(f"Total Rare Energy Used: {total_energy_used['rare']}/{energy_limits['rare']} (Remaining: {remaining_rare})\n")
         f.write(f"Total Limited Energy Used: {total_energy_used['limited']}/{energy_limits['limited']} (Remaining: {remaining_limited})\n")
         
-        # Add sealed cards report at the bottom
-        f.write("\n\n" + "=" * 50 + "\n")
-        f.write("SEALED CARDS REPORT\n")
-        f.write("=" * 50 + "\n")
 
         # Add missing projections information
         f.write("PLAYERS LACKING PROJECTIONS\n")
@@ -479,6 +475,13 @@ def save_lineups(lineups: Dict[str, Dict], output_file: str, energy_limits: Dict
         else:
             f.write("All players have projections. Great!\n")
         f.write("\n" + "=" * 50 + "\n\n")
+        
+        # Add sealed cards report at the bottom
+        f.write("\n\n" + "=" * 50 + "\n")
+        f.write("SEALED CARDS REPORT\n")
+        f.write("=" * 50 + "\n")
+
+        
         
         # Generate and add the sealed cards report
         sealed_report = generate_sealed_cards_report(username)
