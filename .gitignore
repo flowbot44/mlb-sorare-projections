@@ -163,3 +163,4 @@ cython_debug/
 mlb_sorare.db
 *.csv
 /lineups
+/data

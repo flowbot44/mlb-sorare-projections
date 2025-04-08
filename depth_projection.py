@@ -24,8 +24,8 @@ def check_csv_columns(filepath):
         return None
 
 # Check CSV files and their columns
-hitter_file = 'fangraphs-leaderboard-projections-hitter.csv'
-pitcher_file = 'fangraphs-leaderboard-projections-pitcher.csv'
+hitter_file = 'data/batter.csv'
+pitcher_file = 'data/pitcher.csv'
 
 hitter_columns = check_csv_columns(hitter_file)
 pitcher_columns = check_csv_columns(pitcher_file)
