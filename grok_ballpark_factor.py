@@ -509,11 +509,11 @@ def calculate_adjustments(conn, start_date, end_date, game_week_id):
     c = conn.cursor()
     c.execute("DELETE FROM AdjustedProjections WHERE game_week = ?", (game_week_id,))
     
-    # Create a more specific injury lookup that includes team_id
+    # Create injury lookup as before
     basic_injuries = {row[0]: {'status': row[1], 'return_estimate': row[2]} 
                 for row in c.execute("SELECT player_name, status, return_estimate FROM injuries").fetchall()}
     
-    # Create a version with team-specific keys for players
+    # Create the team-specific injury entries
     injuries = {}
     for player_name, injury_data in basic_injuries.items():
         # First, keep the name-only version for backward compatibility
@@ -615,6 +615,10 @@ def calculate_adjustments(conn, start_date, end_date, game_week_id):
             pitcher_dict = {pitcher_columns[i]: pitcher[i] for i in range(len(pitcher_columns))}
             player_name = normalize_name(pitcher_dict.get("Name", ""))
             
+            # Skip processing for Ohtani as a pitcher - we'll use his hitter stats only
+            if "shohei ohtani" in player_name.lower():
+                continue
+                
             # Check if this pitcher is a probable starter for this game by NAME
             is_starter = False
             if home_pitcher_name and player_name == home_pitcher_name:
