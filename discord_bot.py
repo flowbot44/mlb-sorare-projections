@@ -184,22 +184,28 @@ async def slash_lineup(
 async def slash_update(interaction: discord.Interaction):
     """Update injuries and projections."""
     await interaction.response.defer(thinking=True)
-    
-    try:
-        # Step 1: Update injury data
-        injury_data = fetch_injury_data()
-        if injury_data:
-            update_database(injury_data)
-            await interaction.followup.send("Injury data updated successfully. Starting Projections...")
-        else:
-            await interaction.followup.send("Failed to fetch injury data.")
+    await interaction.followup.send("Starting update... This could take a minute or two.")
 
-        # Step 2: Update projections
-        update_projections()  # Runs the main function from grok_ballpark_factor
-        await interaction.followup.send(f"Projections updated for game week {determine_game_week()}.")
+    async def run_update():
+        try:
+            await asyncio.to_thread(perform_update)
+            await interaction.followup.send(f"✅ Update complete for game week {determine_game_week()}.")
+        except Exception as e:
+            await interaction.followup.send(f"❌ Error during update: {str(e)}")
 
-    except Exception as e:
-        await interaction.followup.send(f"Error during update: {str(e)}")
+    await run_update()
+
+def perform_update():
+    # Step 1: Update injury data
+    injury_data = fetch_injury_data()
+    if injury_data:
+        update_database(injury_data)
+        print("Injury data updated successfully.")
+    else:
+        print("Warning: No injury data fetched.")
+
+    # Step 2: Update projections
+    update_projections()
 
 @bot.tree.command(name='help', description="Show information about available commands and parameters")
 async def slash_help(interaction: discord.Interaction):
