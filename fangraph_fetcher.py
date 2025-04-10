@@ -91,16 +91,14 @@ def login_to_fangraphs(driver, username, password):
 def download_projection_data(driver, download_dir, output_dir, stat_type="bat"):
     """Download specific projection data type using existing driver session"""
     friendly_name = "batter" if stat_type == "bat" else "pitcher"
-    file_name = "fangraphs-leaderboard-projections.csv"
-    downloaded_file = os.path.join(download_dir, file_name)
-    crdownload_file = downloaded_file + ".crdownload"
+    
     dest_file = os.path.join(output_dir, f"{friendly_name}.csv")
 
-    # Clean up any old downloads
-    if os.path.exists(downloaded_file):
-        os.remove(downloaded_file)
-    if os.path.exists(crdownload_file):
-        os.remove(crdownload_file)
+    # Clean up any preexisting .csv and .crdownload files
+    for f in glob.glob(os.path.join(download_dir, "*.csv")):
+        os.remove(f)
+    for f in glob.glob(os.path.join(download_dir, "*.crdownload")):
+        os.remove(f)
 
     # Navigate to projections page
     projections_url = f"https://www.fangraphs.com/projections?type=rfangraphsdc&stats={stat_type}&pos=all&team=0&players=0"
@@ -135,27 +133,34 @@ def download_projection_data(driver, download_dir, output_dir, stat_type="bat"):
     # Wait for .crdownload file to appear and disappear
     print("Waiting for download to start...")
     for _ in range(10):
-        if os.path.exists(crdownload_file):
-            print(".crdownload file detected, waiting for download to finish...")
+        cr_files = glob.glob(os.path.join(download_dir, "*.crdownload"))
+        if cr_files:
+            print(f"Detected {len(cr_files)} active download(s)...")
             break
         time.sleep(1)
 
-    for _ in range(20):
-        if not os.path.exists(crdownload_file):
-            print("Download finished.")
+    # Wait for all .crdownload files to finish
+    for _ in range(30):
+        cr_files = glob.glob(os.path.join(download_dir, "*.crdownload"))
+        if not cr_files:
+            print("Download finished. Waiting briefly for final write...")
+            time.sleep(2)  # extra wait to ensure file is flushed
             break
         time.sleep(1)
 
-    if os.path.exists(downloaded_file):
-        print(f"Downloaded file found: {downloaded_file}")
-        os.makedirs(output_dir, exist_ok=True)
-        shutil.move(downloaded_file, dest_file)
-        print(f"File moved and renamed to: {dest_file}")
-        return dest_file
-    else:
+    # Find the most recent .csv
+    csv_files = glob.glob(os.path.join(download_dir, "*.csv"))
+    if not csv_files:
         print("CSV file was not downloaded.")
         return None
 
+    latest_file = max(csv_files, key=os.path.getctime)
+    print(f"Downloaded file found: {latest_file}")
+
+    os.makedirs(output_dir, exist_ok=True)
+    shutil.move(latest_file, dest_file)
+    print(f"File moved and renamed to: {dest_file}")
+    return dest_file
 
 def main():
     # Replace with your FanGraphs username and password
@@ -177,23 +182,9 @@ def main():
     # Ensure download directory exists
     os.makedirs(download_dir, exist_ok=True)
     
-    # Set up Chrome options
-    chrome_options = Options()
-    # Set download directory
-    prefs = {
-        "download.default_directory": download_dir,
-        "download.prompt_for_download": False,
-        "download.directory_upgrade": True,
-        "safebrowsing.enabled": True
-    }
-    chrome_options.add_experimental_option("prefs", prefs)
-    
     # Initialize the driver
     print("Initializing Chrome...")
-    #driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=chrome_options)
-    #driver.maximize_window()  # Maximize window to ensure all elements are visible
-    
-    driver = create_headless_driver(download_dir)
+    driver = create_pi_driver(download_dir)
 
     try:
         # Log in once

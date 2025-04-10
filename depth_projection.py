@@ -3,7 +3,15 @@ import sqlite3
 import os
 from utils import normalize_name
 
-# Connect to SQLite database (creates 'mlb_sorare.db' if it doesn't exist)
+
+# Use environment variables with defaults
+DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
+
+# Construct file paths
+hitter_file = os.path.join(DATA_DIR, 'batter.csv')
+pitcher_file = os.path.join(DATA_DIR, 'pitcher.csv')
+
+# Connect to SQLite database
 conn = sqlite3.connect('mlb_sorare.db')
 
 # Function to check and display CSV column names
@@ -15,18 +23,12 @@ def check_csv_columns(filepath):
     # Read the first few rows to inspect
     try:
         df = pd.read_csv(filepath, nrows=1)
-        #print(f"Columns found in {filepath}:")
-        #for i, col in enumerate(df.columns):
-        #    print(f"  {i}: '{col}'")
         return df.columns.tolist()
     except Exception as e:
         print(f"Error reading {filepath}: {e}")
         return None
 
 # Check CSV files and their columns
-hitter_file = 'data/batter.csv'
-pitcher_file = 'data/pitcher.csv'
-
 hitter_columns = check_csv_columns(hitter_file)
 pitcher_columns = check_csv_columns(pitcher_file)
 
@@ -34,6 +36,7 @@ if not hitter_columns or not pitcher_columns:
     print("Exiting due to file issues.")
     exit(1)
 
+# Rest of your code remains the same
 # Determine the name column for hitters
 hitter_name_col = None
 for possible_name in ['fName', 'Name', 'name', 'PLAYERNAME', 'PlayerName', 'Player', 'player']:
