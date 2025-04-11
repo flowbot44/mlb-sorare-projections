@@ -7,7 +7,12 @@ NAME_TRANSLATIONS = {
     "C J ABRAMS": "CJ ABRAMS",
     "DANIEL LYNCH": "DANIEL LYNCH IV",
     # Add more translations as needed, e.g.:
-    # "J T REALMUTO": "JT REALMUTO",
+    "J T REALMUTO": "JT REALMUTO",
+    "J D MARTINEZ": "JD MARTINEZ",
+    "C J CRON": "CJ CRON",
+    "A J PUK": "AJ PUK",
+    
+
     # "HYUN JIN RYU": "HYUNJIN RYU"
 }
 

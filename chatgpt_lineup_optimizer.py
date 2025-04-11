@@ -17,7 +17,7 @@ class Config:
     BOOST_2025 = 5.0
     STACK_BOOST = 2.0
     ENERGY_PER_NON_2025_CARD = 25
-    DEFAULT_ENERGY_LIMITS = {"rare": 150, "limited": 275}
+    DEFAULT_ENERGY_LIMITS = {"rare": 50, "limited": 50}
     PRIORITY_ORDER = [
         "Rare Champion_1", "Rare Champion_2", "Rare Champion_3",
         "Rare All-Star_1", "Rare All-Star_2", "Rare All-Star_3",
@@ -60,9 +60,10 @@ def fetch_cards(username: str) -> pd.DataFrame:
             WHERE c.username = ? AND c.sealed = 0
         """
         cards_df = pd.read_sql(query, conn, params=(username,))
+        print(f"cards found {len(cards_df)}")
         cards_df["year"] = cards_df["year"].astype(int)
-        cards_df.loc[cards_df["name"] == Config.SHOHEI_NAME, "positions"] = "baseball_designated_hitter"
-    
+        cards_df.loc[cards_df["slug"].str.contains(Config.SHOHEI_NAME), "positions"] = "baseball_designated_hitter"
+
         # Add debug info for players with same name but different teams
         # Convert team_id to integer if it's coming back as float
         if 'team_id' in cards_df.columns:
