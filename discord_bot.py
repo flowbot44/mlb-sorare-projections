@@ -21,7 +21,7 @@ intents.message_content = True  # Enable message content intent
 bot = commands.Bot(command_prefix='!', intents=intents)
 
 # Default lineup parameters (can be overridden through command parameters)
-DEFAULT_ENERGY_LIMITS = {"rare": 150, "limited": 275}
+DEFAULT_ENERGY_LIMITS = {"rare": 50, "limited": 50}
 BOOST_2025 = 5.0
 STACK_BOOST = 2.0
 ENERGY_PER_CARD = 25
@@ -29,6 +29,7 @@ DEFAULT_LINEUP_ORDER = [
     "Rare Champion",
     "Rare All-Star_1", "Rare All-Star_2", "Rare All-Star_3",
     "Rare Challenger_1", "Rare Challenger_2",
+    "Limited Champion",
     "Limited All-Star_1", "Limited All-Star_2", "Limited All-Star_3",
     "Limited Challenger_1", "Limited Challenger_2",
     "Common Minors"
@@ -48,8 +49,8 @@ async def on_ready():
 @bot.tree.command(name='lineup', description="Generate a lineup for the given Sorare MLB username")
 @app_commands.describe(
     username="Sorare MLB username",
-    rare_energy="Energy limit for rare cards (default: 150)",
-    limited_energy="Energy limit for limited cards (default: 275)",
+    rare_energy="Energy limit for rare cards (default: 50)",
+    limited_energy="Energy limit for limited cards (default: 50)",
     boost_2025="Boost value for 2025 cards (default: 5.0)",
     stack_boost="Boost value for stacking players from same team (default: 2.0)",
     energy_per_card="Energy cost per non-2025 card (default: 25)",
@@ -220,8 +221,8 @@ async def slash_help(interaction: discord.Interaction):
 
 **Parameters for `/lineup`:**
 • `username` (required) - Your Sorare MLB username
-• `rare_energy` - Energy limit for rare cards (default: 150)
-• `limited_energy` - Energy limit for limited cards (default: 275)
+• `rare_energy` - Energy limit for rare cards (default: 50)
+• `limited_energy` - Energy limit for limited cards (default: 50)
 • `boost_2025` - Boost value for 2025 cards (default: 5.0)
 • `stack_boost` - Boost value for stacking players from same team (default: 2.0)
 • `energy_per_card` - Energy cost per non-2025 card (default: 25)
@@ -229,10 +230,11 @@ async def slash_help(interaction: discord.Interaction):
 
 **Default Lineup Order:**
 ```
-"Rare Champion",
+Rare Champion_1,
 Rare All-Star_1, Rare All-Star_2, Rare All-Star_3,
 Rare Challenger_1, Rare Challenger_2,
-Limited All-Star_1, 
+Limited Champion_1,
+Limited All-Star_1, Limited All-Star_2, Limited All-Star_3, 
 Limited Challenger_1, Limited Challenger_2,
 Common Minors
 ```
