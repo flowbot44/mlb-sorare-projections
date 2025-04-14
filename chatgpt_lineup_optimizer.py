@@ -160,15 +160,6 @@ def build_lineup(cards_df: pd.DataFrame, lineup_type: str, used_cards: Set[str],
     rarity = get_rarity_from_lineup_type(lineup_type)
     uses_energy = uses_energy_lineup(lineup_type)
     
-    # Skip energy-using lineups if not enough energy is available
-    if uses_energy:
-        # Calculate minimum energy needed
-        min_energy_needed = energy_per_card  # Assume at least one non-2025 card
-        if (rarity in remaining_energy and 
-            remaining_energy[rarity] < min_energy_needed):
-            print(f"Skipping {lineup_type} due to insufficient {rarity} energy")
-            return {"cards": [], "slot_assignments": [], "projections": [], "projected_score": 0, "energy_used": {"rare": 0, "limited": 0}}
-    
     for slot in Config.LINEUP_SLOTS:
         # Update this line to check name-team combination
         candidates = available_cards[
