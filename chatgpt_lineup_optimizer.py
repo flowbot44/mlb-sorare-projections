@@ -141,80 +141,82 @@ def uses_energy_lineup(lineup_type: str) -> bool:
     """Determine if a lineup type uses energy."""
     return "All-Star" in lineup_type or "Champion" in lineup_type
 
-def build_lineup(cards_df: pd.DataFrame, lineup_type: str, used_cards: Set[str], 
-                remaining_energy: Dict[str, int], boost_2025: float, stack_boost: float,
-                energy_per_card: int) -> Dict:
-    """Build a single lineup respecting remaining global energy limits."""
+def build_lineup(cards_df: pd.DataFrame, lineup_type: str, used_cards: Set[str],
+                 remaining_energy: Dict[str, int], boost_2025: float, stack_boost: float,
+                 energy_per_card: int) -> Dict:
+    """Build a single lineup by prioritizing highest projected cards across all positions."""
     available_cards = cards_df[~cards_df["slug"].isin(used_cards)].copy()
     available_cards = apply_boosts(available_cards, lineup_type, boost_2025)
     available_cards = filter_cards_by_lineup_type(available_cards, lineup_type)
-    
+
     lineup = []
     slot_assignments = []
     projections = []
-    used_players = set()  # This will now store (name, team_id) tuples
+    used_players = set()
     rarity_count = {"common": 0, "limited": 0, "rare": 0}
     team_counts = {}
     energy_used = {"rare": 0, "limited": 0}
-    
+    remaining_slots = Config.LINEUP_SLOTS.copy()
+
     rarity = get_rarity_from_lineup_type(lineup_type)
     uses_energy = uses_energy_lineup(lineup_type)
-    
+
+    # Add effective projection with stacking
+    available_cards["effective_projection"] = available_cards["selection_projection"]
     for slot in Config.LINEUP_SLOTS:
-        # Update this line to check name-team combination
-        candidates = available_cards[
-            available_cards.apply(lambda x: (x["name"], x["team_id"]) not in used_players, axis=1) &
-            available_cards["positions"].apply(lambda p: can_fill_position(p, slot))
-        ].copy()
-        
-        if candidates.empty:
-            break
-        
-        # Apply stacking boost for hitters
-        candidates["effective_projection"] = candidates["selection_projection"]
-        if slot in ["CI", "MI", "OF", "H", "Flx"]:
-            candidates.loc[candidates["positions"].apply(is_hitter), "effective_projection"] += (
-                candidates["team_id"].map(lambda x: team_counts.get(x, 0)) * stack_boost
-            )
-        
-        candidates = candidates.sort_values("effective_projection", ascending=False)
-        
-        selected_card = None
-        limits = Config.ALL_STAR_LIMITS.get(f"{rarity.capitalize()} All-Star", {}) if "All-Star" in lineup_type else {}
-        for _, card in candidates.iterrows():
-            card_rarity = card["rarity"]
-            energy_cost = energy_per_card if (uses_energy and card["year"] != 2025 and card_rarity in remaining_energy) else 0
-            
-            # Skip card if it would exceed energy limits
-            if energy_cost > 0 and (card_rarity not in remaining_energy or remaining_energy[card_rarity] < energy_cost):
+        is_hitting_slot = slot in ["CI", "MI", "OF", "H", "Flx"]
+        if is_hitting_slot:
+            available_cards.loc[
+                available_cards["positions"].apply(is_hitter), "effective_projection"
+            ] += available_cards["team_id"].map(lambda x: team_counts.get(x, 0)) * stack_boost
+
+    # Sort cards by best projections first
+    available_cards = available_cards.sort_values("effective_projection", ascending=False)
+
+    limits = Config.ALL_STAR_LIMITS.get(f"{rarity.capitalize()} All-Star", {}) if "All-Star" in lineup_type else {}
+
+    for _, card in available_cards.iterrows():
+        card_key = (card["name"], card["team_id"])
+        if card_key in used_players:
+            continue
+
+        # Try placing the card in a valid slot
+        for slot in remaining_slots:
+            if not can_fill_position(card["positions"], slot):
                 continue
-                
+
+            card_rarity = card["rarity"]
+            is_non_2025 = card["year"] != 2025
+            energy_cost = energy_per_card if (uses_energy and is_non_2025 and card_rarity in remaining_energy) else 0
+
+            if energy_cost > 0 and remaining_energy.get(card_rarity, 0) < energy_cost:
+                continue
+
             if "max_common" in limits and rarity_count["common"] >= limits["max_common"] and card_rarity == "common":
                 continue
             if "max_limited" in limits and rarity_count["limited"] >= limits["max_limited"] and card_rarity == "limited":
                 continue
-            selected_card = card
+
+            # Assign this card to the lineup
+            lineup.append(card["slug"])
+            slot_assignments.append(slot)
+            projections.append(card["total_projection"])
+            used_players.add(card_key)
+            rarity_count[card_rarity] += 1
+            remaining_slots.remove(slot)
+
+            if uses_energy and is_non_2025 and card_rarity in remaining_energy:
+                remaining_energy[card_rarity] -= energy_cost
+                energy_used[card_rarity] += energy_cost
+
+            if is_hitter(card["positions"]):
+                team_counts[card["team_id"]] = team_counts.get(card["team_id"], 0) + 1
+
+            break  # Move to next card
+
+        if not remaining_slots:
             break
-        
-        if selected_card is None:
-            break
-        
-        lineup.append(selected_card["slug"])
-        slot_assignments.append(slot)
-        projections.append(selected_card["total_projection"])
-        used_players.add((selected_card["name"], selected_card["team_id"]))
-        rarity_count[selected_card["rarity"]] += 1
-        
-        # Update energy used tracking
-        if uses_energy and selected_card["year"] != 2025 and selected_card["rarity"] in remaining_energy:
-            energy_cost = energy_per_card
-            energy_used[selected_card["rarity"]] += energy_cost
-            remaining_energy[selected_card["rarity"]] -= energy_cost  # Deduct energy immediately
-            
-        if is_hitter(selected_card["positions"]):
-            team_counts[selected_card["team_id"]] = team_counts.get(selected_card["team_id"], 0) + 1
-        available_cards = available_cards[available_cards["slug"] != selected_card["slug"]]
-    
+
     if len(lineup) == 7:
         return {
             "cards": lineup,
@@ -224,6 +226,7 @@ def build_lineup(cards_df: pd.DataFrame, lineup_type: str, used_cards: Set[str],
             "energy_used": energy_used
         }
     return {"cards": [], "slot_assignments": [], "projections": [], "projected_score": 0, "energy_used": {"rare": 0, "limited": 0}}
+
 
 def build_all_lineups(cards_df: pd.DataFrame, projections_df: pd.DataFrame, energy_limits: Dict[str, int],
                      boost_2025: float, stack_boost: float, energy_per_card: int,
@@ -359,7 +362,7 @@ def generate_weather_report() -> str:
                      print(f"Warning: An error occurred during date formatting for game {game_id}. Error: {general_date_err}")
 
                 report_lines.append(f"  - Forecast: {game['rain']:.0f}% Rain - Date: {game_date_str} - Location: {stadium_name}") # Display formatted date
-                report_lines.append(f"  - Gameday Link: https://www.mlb.com/gameday/{game_id}")
+                report_lines.append(f"  - Gameday Link: https://baseballsavant.mlb.com/preview?game_pk={game_id}")
                 report_lines.append("") # Add a blank line for readability
 
     except Exception as e:
@@ -531,7 +534,12 @@ def save_lineups(lineups: Dict[str, Dict], output_file: str, energy_limits: Dict
                 f.write(f"Projected Score: {data['projected_score']}\n")
                 f.write(f"Energy Used: Rare={data['energy_used']['rare']}, Limited={data['energy_used']['limited']}\n")
                 f.write("Cards:\n")
-                for card, slot, proj in zip(data["cards"], data["slot_assignments"], data["projections"]):
+                # Sort cards by consistent position order
+                ordered_slots = Config.LINEUP_SLOTS
+                card_entries = list(zip(data["cards"], data["slot_assignments"], data["projections"]))
+                card_entries.sort(key=lambda x: ordered_slots.index(x[1]) if x[1] in ordered_slots else 999)
+
+                for card, slot, proj in card_entries:
                     f.write(f"  - {slot}: {card} ({proj:.2f})\n")
                 f.write("\n")
                 total_energy_used["rare"] += data["energy_used"]["rare"]

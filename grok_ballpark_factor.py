@@ -209,7 +209,7 @@ def fetch_weather_and_store(conn, start_date, end_date):
             continue
         lat, lon = stadium[0], stadium[1]
         if lat is None or lon is None:
-            print(f"Skipping game https://www.mlb.com/gameday/{game_id} due to missing stadium {stadium_id} coordinates.")
+            print(f"Skipping game https://baseballsavant.mlb.com/preview?game_pk={game_id} due to missing stadium {stadium_id} coordinates.")
             continue
 
         if time.endswith('Z'):
@@ -346,7 +346,7 @@ def process_hitter(conn, game_data, hitter_data, injuries, game_week_id):
     
     park_factors = {row[0]: row[1] / 100 for row in c.execute("SELECT factor_type, value FROM ParkFactors WHERE stadium_id = ?", (stadium_id,)).fetchall()}
     if not park_factors:
-        print(f"No park factors for stadium_id {stadium_id} for game https://www.mlb.com/gameday/{game_id}, using default 1.0")
+        print(f"No park factors for stadium_id {stadium_id} for game https://baseballsavant.mlb.com/preview?game_pk={game_id}, using default 1.0")
         park_factors = {'R': 1.0, 'RBI': 1.0, 'H': 1.0, '2B': 1.0, '3B': 1.0, 'HR': 1.0, 'BB': 1.0, 'SO': 1.0, 'SB': 1.0, 'CS': 1.0, 'HBP': 1.0}
     
     # Process per-game stats directly from hitters_per_game table
