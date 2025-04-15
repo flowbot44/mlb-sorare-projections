@@ -415,9 +415,9 @@ def process_pitcher(conn, game_data, pitcher_data, injuries, game_week_id, is_st
     # Create a unique player identifier with name and team
     unique_player_key = f"{player_name}_{player_team_id}"
     
-    # Determine if pitcher is generally a starter (projects to 3+ innings per game)
+    # Determine if pitcher is generally a starter (projects to 2+ innings per game)
     innings_per_game = pitcher_data.get('IP_per_game', 0)
-    is_generally_starter = innings_per_game >= 3.0
+    is_generally_starter = innings_per_game > 2.0
     
     # If pitcher is generally a starter but not starting in this game, set score to 0
     if is_generally_starter and not is_starter:
