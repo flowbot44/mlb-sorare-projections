@@ -19,11 +19,11 @@ class Config:
     ENERGY_PER_NON_2025_CARD = 25
     DEFAULT_ENERGY_LIMITS = {"rare": 50, "limited": 50}
     PRIORITY_ORDER = [
-        "Rare Champion_1", "Rare Champion_2", "Rare Champion_3",
+        "Rare Champion_1",
         "Rare All-Star_1", "Rare All-Star_2", "Rare All-Star_3",
         "Rare Challenger_1", "Rare Challenger_2",
-        "Limited Champion_1", "Limited Champion_2", "Limited Champion_3",
         "Limited All-Star_1", "Limited All-Star_2", "Limited All-Star_3",
+        "Limited Champion_1", "Limited Champion_2", "Limited Champion_3",
         "Limited Challenger_1", "Limited Challenger_2",
         "Common Minors"
     ]
@@ -227,6 +227,144 @@ def build_lineup(cards_df: pd.DataFrame, lineup_type: str, used_cards: Set[str],
         }
     return {"cards": [], "slot_assignments": [], "projections": [], "projected_score": 0, "energy_used": {"rare": 0, "limited": 0}}
 
+def build_lineup_optimized(cards_df: pd.DataFrame, lineup_type: str, used_cards: Set[str],
+                           remaining_energy: Dict[str, int], boost_2025: float, stack_boost: float,
+                           energy_per_card: int) -> Dict:
+    """Build a lineup using OR-Tools with a second pass for stacking boosts (hitters only)."""
+
+    def run_optimization(cards, projections_override=None):
+        model = cp_model.CpModel()
+        card_vars = []
+        card_slot_vars = []
+
+        for i, card in enumerate(cards):
+            var = model.NewBoolVar(f"use_{i}")
+            card_vars.append(var)
+
+            slot_vars = {}
+            for slot in Config.LINEUP_SLOTS:
+                if can_fill_position(card["positions"], slot):
+                    slot_vars[slot] = model.NewBoolVar(f"{i}_{slot}")
+            card_slot_vars.append(slot_vars)
+
+        model.Add(sum(card_vars) == 7)
+
+        for slot in Config.LINEUP_SLOTS:
+            model.Add(sum(card_slot_vars[i].get(slot, 0) for i in range(len(cards))) == 1)
+
+        for i, slot_vars in enumerate(card_slot_vars):
+            model.Add(sum(slot_vars.values()) == card_vars[i])
+
+        name_team_to_indices = {}
+        for i, card in enumerate(cards):
+            key = (card["name"], card["team_id"])
+            name_team_to_indices.setdefault(key, []).append(i)
+        for indices in name_team_to_indices.values():
+            if len(indices) > 1:
+                model.Add(sum(card_vars[i] for i in indices) <= 1)
+
+        # Rarity rules
+        rarity = get_rarity_from_lineup_type(lineup_type)
+        uses_energy = uses_energy_lineup(lineup_type)
+        limits = Config.ALL_STAR_LIMITS.get(f"{rarity.capitalize()} All-Star", {}) if "All-Star" in lineup_type else {}
+
+        for rar in ["common", "limited", "rare"]:
+            max_key = f"max_{rar}"
+            indices = [i for i, c in enumerate(cards) if c["rarity"] == rar]
+            if max_key in limits:
+                model.Add(sum(card_vars[i] for i in indices) <= limits[max_key])
+
+        if "allowed_rarities" in limits:
+            allowed = limits["allowed_rarities"]
+            disallowed_indices = [i for i, c in enumerate(cards) if c["rarity"] not in allowed]
+            for i in disallowed_indices:
+                model.Add(card_vars[i] == 0)
+
+        if uses_energy:
+            for rar in ["rare", "limited"]:
+                indices = [i for i, c in enumerate(cards)
+                           if c["rarity"] == rar and c["year"] != 2025]
+                total_energy = sum(card_vars[i] * energy_per_card for i in indices)
+                model.Add(total_energy <= remaining_energy.get(rar, 0))
+
+        # Objective
+        proj_values = projections_override if projections_override else [
+            int(card["selection_projection"] * 100) for card in cards
+        ]
+        model.Maximize(sum(card_vars[i] * proj_values[i] for i in range(len(cards))))
+
+        # Solve
+        solver = cp_model.CpSolver()
+        status = solver.Solve(model)
+        return status, solver, card_vars, card_slot_vars
+
+    # Prep cards
+    available_cards = cards_df[~cards_df["slug"].isin(used_cards)].copy()
+    available_cards = apply_boosts(available_cards, lineup_type, boost_2025)
+    available_cards = filter_cards_by_lineup_type(available_cards, lineup_type)
+
+    if len(available_cards) < 7:
+        return {"cards": [], "slot_assignments": [], "projections": [], "projected_score": 0,
+                "energy_used": {"rare": 0, "limited": 0}}
+
+    cards = available_cards.to_dict("records")
+
+    # --- PASS 1: Run with raw projections ---
+    status, solver, card_vars, card_slot_vars = run_optimization(cards)
+    if status != cp_model.OPTIMAL:
+        return {"cards": [], "slot_assignments": [], "projections": [], "projected_score": 0,
+                "energy_used": {"rare": 0, "limited": 0}}
+
+    # --- PASS 2: Count team stacks from hitters in the selected lineup ---
+    team_stack_counts = {}
+    for i, card in enumerate(cards):
+        if solver.BooleanValue(card_vars[i]) and is_hitter(card["positions"]):
+            team_id = card["team_id"]
+            team_stack_counts[team_id] = team_stack_counts.get(team_id, 0) + 1
+
+    # Keep only the top 3 most stacked teams
+    top_team_ids = sorted(team_stack_counts.items(), key=lambda x: -x[1])[:3]
+    top_stack_teams = {team_id for team_id, _ in top_team_ids}
+
+    # --- PASS 3: Re-run optimizer with boosted projections for stacked hitters ---
+    projections_with_stack = []
+    for i, card in enumerate(cards):
+        proj = card["selection_projection"]
+        if is_hitter(card["positions"]) and card["team_id"] in top_stack_teams:
+            stack_size = team_stack_counts[card["team_id"]]
+            proj += stack_size * stack_boost
+        projections_with_stack.append(int(proj * 100))
+
+    status, solver, card_vars, card_slot_vars = run_optimization(cards, projections_with_stack)
+    if status != cp_model.OPTIMAL:
+        return {"cards": [], "slot_assignments": [], "projections": [], "projected_score": 0,
+                "energy_used": {"rare": 0, "limited": 0}}
+
+    # --- Final output ---
+    lineup, slots, projections = [], [], []
+    energy_used = {"rare": 0, "limited": 0}
+    uses_energy = uses_energy_lineup(lineup_type)
+
+    for i, card in enumerate(cards):
+        if solver.BooleanValue(card_vars[i]):
+            assigned_slot = next(slot for slot, var in card_slot_vars[i].items()
+                                 if solver.BooleanValue(var))
+            lineup.append(card["slug"])
+            slots.append(assigned_slot)
+            projections.append(card["total_projection"])
+
+            if uses_energy and card["year"] != 2025 and card["rarity"] in energy_used:
+                energy_used[card["rarity"]] += energy_per_card
+                remaining_energy[card["rarity"]] -= energy_per_card
+
+    return {
+        "cards": lineup,
+        "slot_assignments": slots,
+        "projections": projections,
+        "projected_score": round(sum(projections), 2),
+        "energy_used": energy_used
+    }
+
 
 def build_all_lineups(cards_df: pd.DataFrame, projections_df: pd.DataFrame, energy_limits: Dict[str, int],
                      boost_2025: float, stack_boost: float, energy_per_card: int,
@@ -267,19 +405,35 @@ def build_all_lineups(cards_df: pd.DataFrame, projections_df: pd.DataFrame, ener
     non_energy_lineups = [lt for lt in Config.PRIORITY_ORDER if not uses_energy_lineup(lt)]
     
     # Process energy lineups in priority order
+    first = True
     for lineup_type in energy_lineups:
-        lineup_data = build_lineup(
+        if first:
+            lineup_data = build_lineup(  # Use greedy for first
+                cards_df, lineup_type, used_cards, remaining_energy, 
+                boost_2025, stack_boost, energy_per_card
+            )
+            first = False
+        else:
+            lineup_data = build_lineup_optimized(  # Use OR-Tools for rest
             cards_df, lineup_type, used_cards, remaining_energy, 
             boost_2025, stack_boost, energy_per_card
         )
+
         if lineup_data["cards"]:
             lineups[lineup_type] = lineup_data
             used_cards.update(lineup_data["cards"])
     
     # Then process non-energy lineups in priority order
     for lineup_type in non_energy_lineups:
-        lineup_data = build_lineup(
-            cards_df, lineup_type, used_cards, remaining_energy,
+        if first:
+            lineup_data = build_lineup(  # Use greedy for first
+                cards_df, lineup_type, used_cards, remaining_energy, 
+                boost_2025, stack_boost, energy_per_card
+            )
+            first = False
+        else:
+            lineup_data = build_lineup_optimized(  # Use OR-Tools for rest
+            cards_df, lineup_type, used_cards, remaining_energy, 
             boost_2025, stack_boost, energy_per_card
         )
         if lineup_data["cards"]:
