@@ -4,4 +4,4 @@ pandas==2.0.3
 ortools==9.12.4544
 requests==2.31.0
 python-dotenv==1.0.0
-pytz
+pytz==2023.3
