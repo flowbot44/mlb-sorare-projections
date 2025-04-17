@@ -1,3 +1,4 @@
+import os
 import sqlite3
 import requests
 import pandas as pd
@@ -45,28 +46,7 @@ def init_db(db_path='mlb_sorare.db'):
     conn.commit()
     return conn
 
-# --- Load Park Factors from CSV ---
-def load_park_factors_from_csv(conn, csv_path='park_data.csv'):
-    """Load park factors from a CSV file into the database."""
-    df = pd.read_csv(csv_path)
-    factor_types = ['Park Factor', 'wOBACon', 'xwOBACon', 'BACON', 'xBACON', 'HardHit', 
-                    'R', 'OBP', 'H', '1B', '2B', '3B', 'HR', 'BB', 'SO']
-    
-    c = conn.cursor()
-    c.execute("DELETE FROM ParkFactors")
-    
-    for _, row in df.iterrows():
-        venue = row['Venue']
-        stadium_id = c.execute("SELECT id FROM Stadiums WHERE name LIKE ?", (f"%{venue}%",)).fetchone()
-        if stadium_id:
-            stadium_id = stadium_id[0]
-            for factor_type in factor_types:
-                value = row[factor_type]
-                c.execute("INSERT INTO ParkFactors (stadium_id, factor_type, value) VALUES (?, ?, ?)",
-                          (stadium_id, factor_type, value))
-    
-    conn.commit()
-    print(f"Park factors updated from {csv_path}")
+
 
 # --- Schedule Functions ---
 def get_schedule(conn, start_date, end_date):
@@ -645,14 +625,13 @@ def calculate_adjustments(conn, start_date, end_date, game_week_id):
     
     conn.commit()
 # --- Main Function ---
-def main(update_park_factors=False, update_rosters=False, specified_date=None):
+def main(update_rosters=False, specified_date=None):
     current_date = specified_date if specified_date else datetime.now().date()
     game_week_id = determine_game_week(current_date)  # Use the utils function
     start_date, end_date = game_week_id.split('_to_')  # Split the string for use
     print(f"Processing game week: {start_date} to {end_date}")
     conn = init_db()
-    if update_park_factors:
-        load_park_factors_from_csv(conn, 'park_data.csv')
+    
     game_week_id = get_schedule(conn, start_date, end_date)  # Still returns the same string
     fetch_weather_and_store(conn, start_date, end_date)
     populate_player_teams(conn, start_date, end_date, update_rosters=update_rosters)
@@ -664,6 +643,5 @@ def main(update_park_factors=False, update_rosters=False, specified_date=None):
 if __name__ == "__main__":
     main()
     # Examples:
-    #main(update_park_factors=True)
     #main(update_rosters=True)
     # main(specified_date=date(2025, 3, 27))
