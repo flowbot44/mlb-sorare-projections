@@ -1,4 +1,7 @@
+import os
 import sqlite3
+
+import pandas as pd
 
 #   'N': 0, 'NNE': 22.5, 'NE': 45, 'ENE': 67.5, 'E': 90, 'ESE': 112.5,
 #   'SE': 135, 'SSE': 157.5, 'S': 180, 'SSW': 202.5, 'SW': 225, 'WSW': 247.5,
@@ -15,7 +18,7 @@ STADIUM_DATA_VERIFIED = {
     15: ("Chase Field", 33.4455, -112.0667, 45, 1, "America/Phoenix"),
     22: ("Dodger Stadium", 34.0739, -118.2400, 30, 0, "America/Los_Angeles"),
     680: ("T-Mobile Park", 47.5914, -122.3325, 90, 1, "America/Los_Angeles"),
-    2392: ("Minute Maid Park", 29.7572, -95.3551, 25, 1, "America/Chicago"),
+    2392: ("Daikin Park", 29.7572, -95.3551, 25, 1, "America/Chicago"),
     2602: ("Great American Ball Park", 39.0975, -84.5072, 125, 0, "America/New_York"),
     2680: ("Petco Park", 32.7076, -117.1570, 0, 0, "America/Los_Angeles"),
     2889: ("Busch Stadium", 38.6226, -90.1928, 65, 0, "America/Chicago"),
@@ -48,9 +51,9 @@ STADIUM_DATA_VERIFIED = {
 
 DB_PATH = "mlb_sorare.db"  # Change if needed
 
-def insert_regular_season_stadiums(db_path):
+def insert_regular_season_stadiums(conn):
     """Insert stadium data from STADIUM_DATA into the SQLite database."""
-    conn = sqlite3.connect(db_path)
+    
     c = conn.cursor()
 
     c.execute("drop table if exists Stadiums")
@@ -64,10 +67,43 @@ def insert_regular_season_stadiums(db_path):
             INSERT OR REPLACE INTO Stadiums (id, name, lat, lon, orientation, is_dome, timezone) 
             VALUES (?, ?, ?, ?, ?, ?, ?)
         """, (stadium_id, name, lat, lon, orientation, is_dome, timezone))
-
     conn.commit()
-    conn.close()
     print(f"✅ {len(STADIUM_DATA_VERIFIED)} stadiums inserted into the database!")
 
-# Run the one-time update
-insert_regular_season_stadiums(DB_PATH)
+# --- Load Park Factors from CSV ---
+def load_park_factors_from_csv(conn, csv_path='park_data.csv'):
+    """Load park factors from a CSV file into the database."""
+    df = pd.read_csv(csv_path)
+    factor_types = ['Park Factor', 'wOBACon', 'xwOBACon', 'BACON', 'xBACON', 'HardHit', 
+                    'R', 'OBP', 'H', '1B', '2B', '3B', 'HR', 'BB', 'SO']
+    
+    c = conn.cursor()
+    c.execute("DELETE FROM ParkFactors")
+    
+    for _, row in df.iterrows():
+        venue = row['Venue']
+        stadium_id = c.execute("SELECT id FROM Stadiums WHERE name LIKE ?", (f"%{venue}%",)).fetchone()
+        if stadium_id:
+            stadium_id = stadium_id[0]
+            for factor_type in factor_types:
+                value = row[factor_type]
+                c.execute("INSERT INTO ParkFactors (stadium_id, factor_type, value) VALUES (?, ?, ?)",
+                          (stadium_id, factor_type, value))
+    
+    conn.commit()
+    print(f"Park factors updated from {csv_path}")
+
+
+def main():
+    # Run the one-time update
+    conn = sqlite3.connect(DB_PATH)
+    insert_regular_season_stadiums(conn)
+
+    park_data_csv = os.path.join("data", 'park_data.csv')
+    load_park_factors_from_csv(conn, park_data_csv)
+
+    
+    conn.close()
+
+if __name__ == "__main__":
+    main()
