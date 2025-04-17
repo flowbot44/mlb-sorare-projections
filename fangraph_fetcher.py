@@ -30,16 +30,27 @@ logger = logging.getLogger(__name__)
 load_dotenv()
 
 def create_headless_driver(download_dir: str) -> webdriver.Chrome:
-    """Create a headless Chrome driver compatible with most environments"""
-    logger.info("Setting up headless Chrome driver")
+    """Create a headless Chrome driver for containerized environments"""
+    logger.info("Setting up headless Chrome driver for Railway")
+    
+    # Install Chrome and ChromeDriver
+    os.system('apt-get update && apt-get install -y wget gnupg2')
+    os.system('wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | apt-key add -')
+    os.system('echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" >> /etc/apt/sources.list.d/google.list')
+    os.system('apt-get update && apt-get install -y google-chrome-stable')
+    
+    # Get Chrome version
+    chrome_version = os.popen('google-chrome --version').read().strip().split()[2]
+    logger.info(f"Installed Chrome version: {chrome_version}")
+    
     chrome_options = Options()
     chrome_options.add_argument("--headless=new")
     chrome_options.add_argument("--disable-gpu")
-    chrome_options.add_argument("--disable-webgl")
     chrome_options.add_argument("--no-sandbox")
-    chrome_options.add_argument("--disable-dev-shm-usage")  # Important for containerized environments
+    chrome_options.add_argument("--disable-dev-shm-usage")
     chrome_options.add_argument("--window-size=1920,1080")
-
+    chrome_options.binary_location = "/usr/bin/google-chrome-stable"
+    
     # Set download preferences
     prefs = {
         "download.default_directory": download_dir,
@@ -48,10 +59,10 @@ def create_headless_driver(download_dir: str) -> webdriver.Chrome:
         "safebrowsing.enabled": True,
     }
     chrome_options.add_experimental_option("prefs", prefs)
-
-    # Install the driver using webdriver-manager
+    
     try:
-        service = Service(ChromeDriverManager().install())
+        # Use the Chrome version to get the matching ChromeDriver
+        service = Service(ChromeDriverManager(chrome_version=chrome_version).install())
         driver = webdriver.Chrome(service=service, options=chrome_options)
         return driver
     except Exception as e:
