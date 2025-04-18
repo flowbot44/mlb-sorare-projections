@@ -96,14 +96,6 @@ def run_full_update():
         print("Running update_stadiums.py...")
         subprocess.run(["python3", os.path.join(script_dir, "update_stadiums.py")], check=True)
         
-        # Step 5: Update injury data
-        injury_data = fetch_injury_data()
-        if injury_data:
-            update_database(injury_data)
-            
-        # Step 6: Update projections using existing function
-        update_projections()
-        
         return True
     except Exception as e:
         print(f"Error during full update: {str(e)}")
