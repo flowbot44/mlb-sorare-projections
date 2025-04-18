@@ -4,7 +4,7 @@ import requests
 import pandas as pd
 from datetime import datetime, timedelta, date
 import pytz
-from utils import normalize_name, determine_game_week
+from utils import normalize_name, determine_game_week, DATABASE_FILE
 
 
 SCORING_MATRIX = {
@@ -16,8 +16,8 @@ DAY_TO_DAY_STATUS = 'Day-To-Day'
 DAY_TO_DAY_REDUCTION = 0.8
 
 # --- Database Initialization ---
-def init_db(db_path='mlb_sorare.db'):
-    conn = sqlite3.connect(db_path)
+def init_db():
+    conn = sqlite3.connect(DATABASE_FILE)
     c = conn.cursor()
     
     # Create or update tables

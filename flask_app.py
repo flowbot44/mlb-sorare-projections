@@ -40,7 +40,7 @@ DEFAULT_LINEUP_ORDER = [
 
 def check_and_create_db():
     """Check if database exists and create it if not"""
-    db_path = os.path.join(script_dir, 'mlb_data.db')  # Assuming this is the database path
+    db_path = os.path.join(script_dir, 'mlb_sorare.db')  # Assuming this is the database path
     
     if not os.path.exists(db_path):
         # Database doesn't exist, need to create and populate it

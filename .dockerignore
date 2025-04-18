@@ -23,7 +23,7 @@ var/
 .gitignore
 .idea
 .vscode
-mlb_data.db
+mlb_sorare.db
 lineups/
 *.csv
 README.md

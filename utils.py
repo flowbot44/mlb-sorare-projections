@@ -1,6 +1,9 @@
 # utils.py
 import unicodedata
 from datetime import datetime, timedelta, date
+import os
+
+DATABASE_FILE = os.environ.get('DATABASE_PATH', 'mlb_sorare.db')
 
 # Dictionary for specific name translations
 NAME_TRANSLATIONS = {

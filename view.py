@@ -1,8 +1,10 @@
 import sqlite3
+from .utils import DATABASE_FILE  # Assuming utils.py is in the same directory
 
 
 
-db_path = "mlb_sorare.db"
+db_path = DATABASE_FILE  # Assuming utils.py is in the same directory
+
 def get_cards_with_injuries():
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
