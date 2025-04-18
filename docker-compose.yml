@@ -1,11 +1,11 @@
-version: '3'
-
 services:
   sorare-lineup-optimizer:
     build: .
     container_name: sorare-lineup-optimizer
+    ports:
+      - "8080:8080"
     volumes:
-      - ./mlb_data.db:/app/mlb_data.db
+      - ./mlb_sorare.db:/app/mlb_sorare.db
       - ./lineups:/app/lineups
     restart: unless-stopped
     environment:

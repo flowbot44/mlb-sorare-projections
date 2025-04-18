@@ -2,9 +2,10 @@
 import sqlite3
 from datetime import datetime, timedelta
 import pandas as pd
-import os
+from .utils import DATABASE_FILE  # Assuming utils.py is in the same directory
 
-def generate_sealed_cards_report(db_path, username):
+
+def generate_sealed_cards_report(username):
     """
     Generate a report of sealed cards with projections and injured players expected back soon.
     
@@ -15,7 +16,7 @@ def generate_sealed_cards_report(db_path, username):
     conn = None
     try:
         # Connect to database
-        conn = sqlite3.connect(db_path)
+        conn = sqlite3.connect(DATABASE_FILE)
         cursor = conn.cursor()
         
         # Get current date
@@ -135,4 +136,4 @@ if __name__ == "__main__":
         exit(1)
     
     # Generate report
-    generate_sealed_cards_report("mlb_sorare.db", username)
+    generate_sealed_cards_report(username)

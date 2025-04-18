@@ -4,7 +4,8 @@ import re
 import sqlite3
 import time
 import random
-from utils import normalize_name
+from utils import normalize_name, DATABASE_FILE
+
 
 class SorareMLBClient:
     def __init__(self):
@@ -105,7 +106,7 @@ class SorareMLBClient:
             for card in all_cards
         ]
         
-        conn = sqlite3.connect('mlb_sorare.db')
+        conn = sqlite3.connect(DATABASE_FILE)
         cursor = conn.cursor()
         
         cursor.execute('''

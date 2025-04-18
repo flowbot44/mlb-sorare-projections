@@ -1,7 +1,7 @@
 import pandas as pd
 import sqlite3
 import os
-from utils import normalize_name
+from utils import normalize_name, DATABASE_FILE
 
 
 # Use environment variables with defaults
@@ -12,7 +12,7 @@ hitter_file = os.path.join(DATA_DIR, 'batter.csv')
 pitcher_file = os.path.join(DATA_DIR, 'pitcher.csv')
 
 # Connect to SQLite database
-conn = sqlite3.connect('mlb_sorare.db')
+conn = sqlite3.connect(DATABASE_FILE)
 
 # Function to check and display CSV column names
 def check_csv_columns(filepath):

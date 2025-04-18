@@ -4,13 +4,13 @@ from ortools.sat.python import cp_model
 import os
 import argparse
 from typing import Dict, List, Set, Optional
-from utils import determine_game_week  # Import from utils
+from utils import determine_game_week, DATABASE_FILE  # Import from utils
 from datetime import datetime, timedelta
 
 
 # Configuration Constants
 class Config:
-    DB_PATH = "mlb_sorare.db"
+    DB_PATH = DATABASE_FILE
     USERNAME = "flowbot44"
     GAME_WEEK = determine_game_week()
     SHOHEI_NAME = "shohei-ohtani"

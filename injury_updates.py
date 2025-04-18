@@ -1,8 +1,8 @@
 import sqlite3
 import requests
-from utils import normalize_name  # Import the normalization function
+from utils import normalize_name, DATABASE_FILE  # Import the normalization function
 
-db_path = "mlb_sorare.db"
+
 api_url = "https://site.api.espn.com/apis/site/v2/sports/baseball/mlb/injuries"
 
 def fetch_injury_data():
@@ -14,7 +14,7 @@ def fetch_injury_data():
         return None
 
 def update_database(data):
-    conn = sqlite3.connect(db_path)
+    conn = sqlite3.connect(DATABASE_FILE)
     cursor = conn.cursor()
     
     cursor.execute("DROP TABLE IF EXISTS injuries")  # Drop the table if it exists
