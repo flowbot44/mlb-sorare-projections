@@ -50,6 +50,14 @@
             font-size: 0.8rem;
             margin-bottom: 15px;
         }
+        .db-init-container {
+            background-color: #fff3cd;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            padding: 20px;
+            margin-bottom: 20px;
+            display: none;
+        }
     </style>
 </head>
 <body>
@@ -58,6 +66,24 @@
         
         <div class="db-status alert alert-secondary">
             <strong>Status:</strong> Checking database connection...
+        </div>
+        
+        <!-- New database initialization container -->
+        <div class="db-init-container" id="dbInitContainer">
+            <h4>Database Initialization Required</h4>
+            <p>The database does not exist or is missing required tables. You need to initialize the database before you can generate lineups.</p>
+            <p><strong>This will:</strong></p>
+            <ul>
+                <li>Download data from Fangraphs</li>
+                <li>Download park factor data</li>
+                <li>Process statistical projections</li>
+                <li>Update stadium information</li>
+                <li>Fetch injury data</li>
+            </ul>
+            <p><strong>Note:</strong> This process may take several minutes.</p>
+            <div class="d-grid gap-2">
+                <button type="button" id="fullUpdateBtn" class="btn btn-warning">Initialize Database</button>
+            </div>
         </div>
         
         <div class="form-container">
@@ -105,8 +131,15 @@
                 </div>
                 
                 <div class="d-grid gap-2">
-                    <button type="submit" class="btn btn-primary">Generate Lineups</button>
-                    <button type="button" id="updateDataBtn" class="btn btn-secondary">Update Injuries & Projections</button>
+                    <button type="submit" class="btn btn-primary" id="generateBtn">Generate Lineups</button>
+                    <div class="row mt-2">
+                        <div class="col-md-6">
+                            <button type="button" id="updateDataBtn" class="btn btn-secondary w-100">Update Injuries & Projections</button>
+                        </div>
+                        <div class="col-md-6">
+                            <button type="button" id="fullRefreshBtn" class="btn btn-outline-danger w-100">Full Database Refresh</button>
+                        </div>
+                    </div>
                 </div>
             </form>
         </div>
@@ -115,7 +148,7 @@
             <div class="spinner-border text-primary" role="status">
                 <span class="visually-hidden">Loading...</span>
             </div>
-            <p class="mt-2">Processing your request... This may take a minute.</p>
+            <p class="mt-2" id="loadingMessage">Processing your request... This may take a minute.</p>
         </div>
         
         <div class="results-container">
@@ -134,28 +167,7 @@
     <script>
         document.addEventListener('DOMContentLoaded', function() {
             // Check database status
-            fetch('/check_db')
-                .then(response => response.json())
-                .then(data => {
-                    const statusDiv = document.querySelector('.db-status');
-                    if (data.status === 'connected') {
-                        statusDiv.className = 'db-status alert alert-success';
-                        statusDiv.innerHTML = `
-                            <strong>Database Connected:</strong> 
-                            Game Week: ${data.game_week} | 
-                            Tables: ${data.tables.join(', ')} | 
-                            Projections: ${data.projection_count}
-                        `;
-                    } else {
-                        statusDiv.className = 'db-status alert alert-danger';
-                        statusDiv.textContent = `Database Error: ${data.message}`;
-                    }
-                })
-                .catch(error => {
-                    const statusDiv = document.querySelector('.db-status');
-                    statusDiv.className = 'db-status alert alert-danger';
-                    statusDiv.textContent = `Error checking database: ${error}`;
-                });
+            checkDatabaseStatus();
             
             // Form submission
             const form = document.getElementById('lineupForm');
@@ -164,6 +176,7 @@
                 
                 // Show loading spinner
                 document.querySelector('.loading').style.display = 'block';
+                document.getElementById('loadingMessage').textContent = 'Generating lineups... This may take a minute.';
                 document.querySelector('.results-container').style.display = 'none';
                 
                 // Get form data
@@ -207,6 +220,7 @@
                 
                 // Show loading spinner
                 document.querySelector('.loading').style.display = 'block';
+                document.getElementById('loadingMessage').textContent = 'Updating data... This may take several minutes.';
                 
                 // Send update request
                 fetch('/update_data', {
@@ -229,6 +243,100 @@
                     alert(`Error: ${error.message}`);
                 });
             });
+            
+            // Full database refresh button
+            document.getElementById('fullRefreshBtn').addEventListener('click', function() {
+                if (!confirm('WARNING: This will completely refresh the database from scratch, downloading all data and recreating projections. This process will take several minutes. Continue?')) {
+                    return;
+                }
+                
+                runFullUpdate();
+            });
+            
+            // Initialize database button
+            document.getElementById('fullUpdateBtn').addEventListener('click', function() {
+                runFullUpdate();
+            });
+            
+            function runFullUpdate() {
+                // Show loading spinner
+                document.querySelector('.loading').style.display = 'block';
+                document.getElementById('loadingMessage').textContent = 'Initializing database... This will take several minutes.';
+                
+                // Send full update request
+                fetch('/run_full_update', {
+                    method: 'POST'
+                })
+                .then(response => response.json())
+                .then(data => {
+                    document.querySelector('.loading').style.display = 'none';
+                    
+                    if (data.error) {
+                        alert(data.error);
+                    } else {
+                        alert(data.message);
+                        // Refresh page to update status
+                        window.location.reload();
+                    }
+                })
+                .catch(error => {
+                    document.querySelector('.loading').style.display = 'none';
+                    alert(`Error: ${error.message}`);
+                });
+            }
+            
+            function checkDatabaseStatus() {
+                fetch('/check_db')
+                    .then(response => response.json())
+                    .then(data => {
+                        const statusDiv = document.querySelector('.db-status');
+                        const generateBtn = document.getElementById('generateBtn');
+                        const dbInitContainer = document.getElementById('dbInitContainer');
+                        
+                        if (data.status === 'connected') {
+                            // Database exists and is properly configured
+                            statusDiv.className = 'db-status alert alert-success';
+                            statusDiv.innerHTML = `
+                                <strong>Database Connected:</strong> 
+                                Game Week: ${data.game_week} | 
+                                Tables: ${data.tables.join(', ')} | 
+                                Projections: ${data.projection_count}
+                            `;
+                            
+                            // Enable lineup generation
+                            generateBtn.disabled = false;
+                            dbInitContainer.style.display = 'none';
+                            
+                        } else if (data.status === 'missing') {
+                            // Database doesn't exist or needs initialization
+                            statusDiv.className = 'db-status alert alert-warning';
+                            statusDiv.innerHTML = `
+                                <strong>Database Not Ready:</strong> 
+                                ${data.message}
+                            `;
+                            
+                            // Disable lineup generation and show init container
+                            generateBtn.disabled = true;
+                            dbInitContainer.style.display = 'block';
+                            
+                        } else {
+                            // Some other error
+                            statusDiv.className = 'db-status alert alert-danger';
+                            statusDiv.textContent = `Database Error: ${data.message}`;
+                            
+                            // Disable lineup generation
+                            generateBtn.disabled = true;
+                        }
+                    })
+                    .catch(error => {
+                        const statusDiv = document.querySelector('.db-status');
+                        statusDiv.className = 'db-status alert alert-danger';
+                        statusDiv.textContent = `Error checking database: ${error}`;
+                        
+                        // Disable lineup generation on error
+                        document.getElementById('generateBtn').disabled = true;
+                    });
+            }
         });
     </script>
 </body>

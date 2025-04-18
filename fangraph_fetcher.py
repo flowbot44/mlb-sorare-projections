@@ -11,7 +11,6 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
-from webdriver_manager.chrome import ChromeDriverManager
 from selenium.common.exceptions import TimeoutException, NoSuchElementException
 from dotenv import load_dotenv
 
@@ -30,18 +29,8 @@ logger = logging.getLogger(__name__)
 load_dotenv()
 
 def create_headless_driver(download_dir: str) -> webdriver.Chrome:
-    """Create a headless Chrome driver for containerized environments"""
-    logger.info("Setting up headless Chrome driver for Railway")
-    
-    # Install Chrome and ChromeDriver
-    os.system('apt-get update && apt-get install -y wget gnupg2')
-    os.system('wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | apt-key add -')
-    os.system('echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" >> /etc/apt/sources.list.d/google.list')
-    os.system('apt-get update && apt-get install -y google-chrome-stable')
-    
-    # Get Chrome version
-    chrome_version = os.popen('google-chrome --version').read().strip().split()[2]
-    logger.info(f"Installed Chrome version: {chrome_version}")
+    """Create a headless Chrome driver using pre-installed Chromium"""
+    logger.info("Setting up headless Chromium driver")
     
     chrome_options = Options()
     chrome_options.add_argument("--headless=new")
@@ -49,7 +38,15 @@ def create_headless_driver(download_dir: str) -> webdriver.Chrome:
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
     chrome_options.add_argument("--window-size=1920,1080")
-    chrome_options.binary_location = "/usr/bin/google-chrome-stable"
+    
+    # Use the pre-installed Chromium from the Docker image
+    chromium_path = os.environ.get('CHROME_BIN', '/usr/bin/chromium')
+    chromedriver_path = os.environ.get('CHROMEDRIVER_PATH', '/usr/bin/chromedriver')
+    
+    logger.info(f"Using Chromium at: {chromium_path}")
+    logger.info(f"Using ChromeDriver at: {chromedriver_path}")
+    
+    chrome_options.binary_location = chromium_path
     
     # Set download preferences
     prefs = {
@@ -61,8 +58,8 @@ def create_headless_driver(download_dir: str) -> webdriver.Chrome:
     chrome_options.add_experimental_option("prefs", prefs)
     
     try:
-        # Use the Chrome version to get the matching ChromeDriver
-        service = Service(ChromeDriverManager(chrome_version=chrome_version).install())
+        # Use the pre-installed ChromeDriver
+        service = Service(executable_path=chromedriver_path)
         driver = webdriver.Chrome(service=service, options=chrome_options)
         return driver
     except Exception as e:
