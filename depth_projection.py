@@ -15,9 +15,7 @@ DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 hitter_file = os.path.join(DATA_DIR, 'batter.csv')
 pitcher_file = os.path.join(DATA_DIR, 'pitcher.csv')
 
-# Connect to SQLite database
-conn = sqlite3.connect(DATABASE_FILE)
-DATABASE_FILE = os.environ.get('DATABASE_FILE', 'mlb_sorare.db')
+os.makedirs(os.path.dirname(DATABASE_FILE), exist_ok=True) 
 logging.info(f"Attempting to connect to database at: {DATABASE_FILE}")
 
 try:

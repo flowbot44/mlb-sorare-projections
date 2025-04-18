@@ -20,17 +20,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application code
 COPY . .
 
-# Create directories
-RUN mkdir -p lineups
-
-# Create the directory for the database if it doesn't exist
-RUN mkdir -p /app/database
-
-# Set permissions for the database directory (adjust user if necessary)
-# This example gives read/write to all for simplicity in this context,
-# but you should be more restrictive in a production environment.
-RUN chmod -R 777 /app/database
-
 # Set environment variables for Chrome/Selenium
 ENV PYTHONUNBUFFERED=1
 ENV DISPLAY=:99
@@ -42,6 +31,14 @@ ENV SELENIUM_HEADLESS=true
 RUN useradd -m appuser
 RUN chown -R appuser:appuser /app
 USER appuser
+
+# Create directories
+RUN mkdir -p lineups
+RUN mkdir -p /app/database
+
+# Set permissions that will apply to mounted volumes
+RUN chmod -R 777 /app/database /app/lineups
+RUN chown -R appuser:appuser /app
 
 # Expose the port the app runs on
 EXPOSE 5000
