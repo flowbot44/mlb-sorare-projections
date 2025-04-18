@@ -23,8 +23,6 @@ def init_db(db_path='mlb_sorare.db'):
     # Create or update tables
     c.execute('''CREATE TABLE IF NOT EXISTS Stadiums 
                  (id INTEGER PRIMARY KEY, name TEXT, lat REAL, lon REAL, orientation REAL, is_dome INTEGER)''')
-    c.execute('''CREATE TABLE IF NOT EXISTS ParkFactors 
-                 (id INTEGER PRIMARY KEY AUTOINCREMENT, stadium_id INTEGER, factor_type TEXT, value REAL)''')
     c.execute('DROP TABLE IF EXISTS Games')
     c.execute('''CREATE TABLE IF NOT EXISTS Games 
                  (id INTEGER PRIMARY KEY, date TEXT, time TEXT, stadium_id INTEGER, 

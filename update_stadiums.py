@@ -78,7 +78,9 @@ def load_park_factors_from_csv(conn, csv_path='park_data.csv'):
                     'R', 'OBP', 'H', '1B', '2B', '3B', 'HR', 'BB', 'SO']
     
     c = conn.cursor()
-    c.execute("DELETE FROM ParkFactors")
+    c.execute("drop table if exists ParkFactors")
+    c.execute('''CREATE TABLE IF NOT EXISTS ParkFactors 
+                 (id INTEGER PRIMARY KEY AUTOINCREMENT, stadium_id INTEGER, factor_type TEXT, value REAL)''')
     
     for _, row in df.iterrows():
         venue = row['Venue']
