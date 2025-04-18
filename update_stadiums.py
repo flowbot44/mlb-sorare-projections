@@ -1,5 +1,6 @@
 import os
 import sqlite3
+from utils import DATABASE_FILE  # Assuming utils.py is in the same directory
 
 import pandas as pd
 
@@ -49,8 +50,6 @@ STADIUM_DATA_VERIFIED = {
 #    15: ("Tropicana Field", 27.7683, -82.6534, 100, 1),
 #}
 
-DB_PATH = "mlb_sorare.db"  # Change if needed
-
 def insert_regular_season_stadiums(conn):
     """Insert stadium data from STADIUM_DATA into the SQLite database."""
     
@@ -98,7 +97,7 @@ def load_park_factors_from_csv(conn, csv_path='park_data.csv'):
 
 def main():
     # Run the one-time update
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DATABASE_FILE)
     insert_regular_season_stadiums(conn)
 
     park_data_csv = os.path.join("data", 'park_data.csv')

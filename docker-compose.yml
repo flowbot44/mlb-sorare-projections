@@ -5,9 +5,7 @@ services:
     ports:
       - "8080:8080"
     volumes:
-      - /database:/app/database
-      - ./lineups:/app/lineups
-    restart: unless-stopped
+      - ./database:/app/database  # Make sure this directory exists locally
     environment:
       - PORT=5000
       - DATABASE_PATH=/app/database/mlb_sorare.db

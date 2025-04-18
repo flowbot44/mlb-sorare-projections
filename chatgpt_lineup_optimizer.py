@@ -46,7 +46,8 @@ class Config:
 def get_db_connection() -> sqlite3.Connection:
     """Create a connection to the SQLite database."""
     try:
-        return sqlite3.connect(Config.DB_PATH)
+        os.makedirs(os.path.dirname(DATABASE_FILE), exist_ok=True)
+        return sqlite3.connect(DATABASE_FILE)
     except sqlite3.Error as e:
         raise RuntimeError(f"Failed to connect to database: {e}")
 
