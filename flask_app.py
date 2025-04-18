@@ -17,6 +17,8 @@ from chatgpt_lineup_optimizer import (
 from card_fetcher import SorareMLBClient
 from injury_updates import fetch_injury_data, update_database
 from grok_ballpark_factor import main as update_projections, determine_game_week
+from utils import DATABASE_FILE
+import logging
 
 # Initialize Flask app
 app = Flask(__name__)
@@ -38,12 +40,33 @@ DEFAULT_LINEUP_ORDER = [
     "Common Minors"
 ]
 
+
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+# Debugging info
+logging.info(f"Current working directory: {os.getcwd()}")
+logging.info(f"DATABASE_FILE path: {DATABASE_FILE}")
+logging.info(f"Directory portion: {os.path.dirname(DATABASE_FILE)}")
+
+# Check directory permissions
+if os.path.dirname(DATABASE_FILE):
+    if not os.path.exists(os.path.dirname(DATABASE_FILE)):
+        logging.info(f"Directory does not exist, creating: {os.path.dirname(DATABASE_FILE)}")
+        os.makedirs(os.path.dirname(DATABASE_FILE), exist_ok=True)
+    
+    test_permissions = os.access(os.path.dirname(DATABASE_FILE), os.W_OK)
+    logging.info(f"Directory is writable: {test_permissions}")
+
 def check_and_create_db():
     """Check if database exists and create it if not"""
-    db_path = os.path.join(script_dir, 'mlb_sorare.db')  # Assuming this is the database path
+    # Use the same database path as the rest of the application
+    db_path = DATABASE_FILE
     
     if not os.path.exists(db_path):
         # Database doesn't exist, need to create and populate it
+        # Make sure the directory exists
+        os.makedirs(os.path.dirname(db_path), exist_ok=True)
         return False
     
     # Check if required tables exist
@@ -54,12 +77,12 @@ def check_and_create_db():
         # Check for existence of required tables
         tables_query = """
         SELECT name FROM sqlite_master 
-        WHERE type='table' AND name IN ('cards', 'AdjustedProjections', 'injuries', 'PlayerTeams')
+        WHERE type='table' AND name IN ('hitters_per_game', 'pitchers_per_game', 'ParkFactors', 'Stadiums')
         """
         tables = cursor.execute(tables_query).fetchall()
         table_names = [t[0] for t in tables]
         
-        required_tables = ['cards', 'AdjustedProjections', 'injuries', 'PlayerTeams']
+        required_tables = ['hitters_per_game', 'pitchers_per_game', 'ParkFactors', 'Stadiums']
         missing_tables = [table for table in required_tables if table not in table_names]
         
         conn.close()
@@ -151,7 +174,14 @@ def generate_lineup():
     }
     
     try:
-        # Fetch cards and projections
+        # FIRST: Fetch latest cards from Sorare API for this user
+        sorare_client = SorareMLBClient()
+        result = sorare_client.get_user_mlb_cards(username)
+        
+        if not result:
+            return jsonify({'error': f"Failed to fetch cards for user {username} from Sorare."})
+        
+        # THEN: Fetch cards from the database
         cards_df = fetch_cards(username)
         projections_df = fetch_projections()
         
@@ -201,6 +231,28 @@ def generate_lineup():
         
     except Exception as e:
         return jsonify({'error': f"Error generating lineup: {str(e)}"})
+    
+@app.route('/fetch_cards', methods=['POST'])
+def fetch_user_cards():
+    username = request.form.get('username')
+    
+    if not username:
+        return jsonify({'error': "Username is required"})
+    
+    try:
+        sorare_client = SorareMLBClient()
+        result = sorare_client.get_user_mlb_cards(username)
+        
+        if result:
+            return jsonify({
+                'success': True,
+                'message': f"Successfully fetched {len(result['cards'])} cards for {username}",
+                'card_count': len(result['cards'])
+            })
+        else:
+            return jsonify({'error': f"Failed to fetch cards for {username}"})
+    except Exception as e:
+        return jsonify({'error': f"Error fetching cards: {str(e)}"})
 
 @app.route('/download_lineup/<username>')
 def download_lineup(username):
@@ -260,13 +312,22 @@ def check_db():
         # Check for existence of required tables
         tables_query = """
         SELECT name FROM sqlite_master 
-        WHERE type='table' AND name IN ('cards', 'AdjustedProjections', 'injuries', 'PlayerTeams')
+        WHERE type='table' AND name IN ('AdjustedProjections', 'injuries', 'PlayerTeams')
         """
         tables = cursor.execute(tables_query).fetchall()
         table_names = [t[0] for t in tables]
+       
+        required_tables = ['AdjustedProjections', 'injuries', 'PlayerTeams']
+        missing_tables = [table for table in required_tables if table not in table_names]
         
         # Get game week info
         game_week = Config.GAME_WEEK
+
+        if missing_tables:
+            return jsonify({
+                'status': 'missing',
+                'message': 'Game week info missing. Run update injuries and projections.'
+            })
         
         # Get count of projections for current game week
         proj_count = cursor.execute(
