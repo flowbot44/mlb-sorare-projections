@@ -23,6 +23,14 @@ COPY . .
 # Create directories
 RUN mkdir -p lineups
 
+# Create the directory for the database if it doesn't exist
+RUN mkdir -p /app/database
+
+# Set permissions for the database directory (adjust user if necessary)
+# This example gives read/write to all for simplicity in this context,
+# but you should be more restrictive in a production environment.
+RUN chmod -R 777 /app/database
+
 # Set environment variables for Chrome/Selenium
 ENV PYTHONUNBUFFERED=1
 ENV DISPLAY=:99
