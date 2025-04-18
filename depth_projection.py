@@ -2,6 +2,10 @@ import pandas as pd
 import sqlite3
 import os
 from utils import normalize_name, DATABASE_FILE
+import logging
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
 
 
 # Use environment variables with defaults
@@ -13,6 +17,20 @@ pitcher_file = os.path.join(DATA_DIR, 'pitcher.csv')
 
 # Connect to SQLite database
 conn = sqlite3.connect(DATABASE_FILE)
+DATABASE_FILE = os.environ.get('DATABASE_FILE', 'mlb_sorare.db')
+logging.info(f"Attempting to connect to database at: {DATABASE_FILE}")
+
+try:
+    conn = sqlite3.connect(DATABASE_FILE)
+    logging.info("Successfully connected to the database.")
+    # ... your database operations ...
+except sqlite3.OperationalError as e:
+    logging.error(f"Error opening database: {e}")
+    # Handle the error appropriately, maybe exit the script
+    raise
+finally:
+    if 'conn' in locals() and conn:
+        conn.close()
 
 # Function to check and display CSV column names
 def check_csv_columns(filepath):
