@@ -1,0 +1,15 @@
+version: '3'
+
+services:
+  sorare-lineup-optimizer:
+    build: .
+    container_name: sorare-lineup-optimizer
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./mlb_data.db:/app/mlb_data.db
+      - ./lineups:/app/lineups
+    restart: unless-stopped
+    environment:
+      - PORT=5000
+      - SELENIUM_HEADLESS=true
