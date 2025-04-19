@@ -19,7 +19,7 @@ class Config:
     ENERGY_PER_NON_2025_CARD = 25
     DEFAULT_ENERGY_LIMITS = {"rare": 50, "limited": 50}
     PRIORITY_ORDER = [
-        "Rare Champion_1",
+        "Rare Champion_1", "Rare Champion_2", "Rare Champion_3",
         "Rare All-Star_1", "Rare All-Star_2", "Rare All-Star_3",
         "Rare Challenger_1", "Rare Challenger_2",
         "Limited All-Star_1", "Limited All-Star_2", "Limited All-Star_3",

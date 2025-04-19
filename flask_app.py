@@ -27,7 +27,7 @@ app = Flask(__name__)
 script_dir = os.path.dirname(os.path.abspath(__file__))
 
 # Default lineup parameters (same as in discord_bot.py)
-DEFAULT_ENERGY_LIMITS = {"rare": 150, "limited": 275}
+DEFAULT_ENERGY_LIMITS = {"rare": 50, "limited": 50}
 BOOST_2025 = 5.0
 STACK_BOOST = 2.0
 ENERGY_PER_CARD = 25
