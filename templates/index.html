@@ -615,6 +615,37 @@
                 runFullUpdate();
             });
 
+            // Add event listener for "Update Injuries & Projections" button
+            document.getElementById('updateDataBtn').addEventListener('click', function () {
+                if (!confirm('This will update injuries and projections. Continue?')) {
+                    return;
+                }
+
+                // Show loading spinner
+                document.querySelector('.loading').style.display = 'block';
+                document.getElementById('loadingMessage').textContent = 'Updating injuries and projections...';
+
+                // Send request to update injuries and projections
+                fetch('/update_injuries_projections', {
+                    method: 'POST'
+                })
+                .then(response => response.json())
+                .then(data => {
+                    document.querySelector('.loading').style.display = 'none';
+
+                    if (data.error) {
+                        alert(`Error: ${data.error}`);
+                    } else {
+                        alert(data.message);
+                        window.location.reload(); // Reload the page to reflect updates
+                    }
+                })
+                .catch(error => {
+                    document.querySelector('.loading').style.display = 'none';
+                    alert(`Error: ${error.message}`);
+                });
+            });
+
             function runFullUpdate() {
                 document.querySelector('.loading').style.display = 'block';
                 document.getElementById('loadingMessage').textContent = 'Initializing database... This will take several minutes.';
