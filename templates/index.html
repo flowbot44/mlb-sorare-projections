@@ -626,7 +626,7 @@
                 document.getElementById('loadingMessage').textContent = 'Updating injuries and projections...';
 
                 // Send request to update injuries and projections
-                fetch('/update_injuries_projections', {
+                fetch('/update_data', {
                     method: 'POST'
                 })
                 .then(response => response.json())
