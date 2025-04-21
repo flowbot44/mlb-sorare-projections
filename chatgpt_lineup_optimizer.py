@@ -732,6 +732,368 @@ def save_lineups(lineups: Dict[str, Dict], output_file: str, energy_limits: Dict
         sealed_report = generate_sealed_cards_report(username)
         f.write(sealed_report)
 
+def generate_lineups_html(lineups, energy_limits, username, boost_2025, stack_boost, energy_per_card, 
+                          cards_df, projections_df, weather_html=None):
+    """Generate HTML content for lineups instead of saving to a file."""
+    
+    html_content = f"""
+    <div class="lineup-container">
+        <h1>Lineups for Game Week {Config.GAME_WEEK}</h1>
+        <div class="lineup-header">
+            <p><strong>Username:</strong> {username}</p>
+            <p><strong>2025 Card Boost:</strong> {boost_2025}</p>
+            <p><strong>Stack Boost:</strong> {stack_boost}</p>
+            <p><strong>Energy Per Non-2025 Card:</strong> {energy_per_card}</p>
+        </div>
+        
+        <div class="weather-section">
+            <h2>WEATHER REPORT</h2>
+            {weather_html if weather_html else generate_weather_html()}
+        </div>
+        
+        <div class="lineups-section">
+    """
+    
+    total_energy_used = {"rare": 0, "limited": 0}
+    
+    # Print lineups in priority order
+    for lineup_type in Config.PRIORITY_ORDER:
+        data = lineups[lineup_type]
+        if data["cards"]:
+            html_content += f"""
+            <div class="lineup-card">
+                <h3>{lineup_type.replace('_', ' #')}</h3>
+                <p class="lineup-score">Projected Score: <strong>{data['projected_score']}</strong></p>
+                <p class="energy-usage">Energy Used: <span class="rare-energy">Rare={data['energy_used']['rare']}</span>, 
+                <span class="limited-energy">Limited={data['energy_used']['limited']}</span></p>
+                <div class="lineup-cards">
+                    <h4>Cards:</h4>
+                    <table class="lineup-table">
+                        <thead>
+                            <tr>
+                                <th>Position</th>
+                                <th>Card</th>
+                                <th>Projection</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+            """
+            
+            # Sort cards by consistent position order
+            ordered_slots = Config.LINEUP_SLOTS
+            card_entries = list(zip(data["cards"], data["slot_assignments"], data["projections"]))
+            card_entries.sort(key=lambda x: ordered_slots.index(x[1]) if x[1] in ordered_slots else 999)
+
+            for card, slot, proj in card_entries:
+                html_content += f"""
+                    <tr>
+                        <td>{slot}</td>
+                        <td>{card}</td>
+                        <td>{proj:.2f}</td>
+                    </tr>
+                """
+            
+            html_content += """
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            """
+            
+            total_energy_used["rare"] += data["energy_used"]["rare"]
+            total_energy_used["limited"] += data["energy_used"]["limited"]
+    
+    remaining_rare = energy_limits["rare"] - total_energy_used["rare"]
+    remaining_limited = energy_limits["limited"] - total_energy_used["limited"]
+    
+    html_content += f"""
+        </div>
+        
+        <div class="energy-summary">
+            <h2>Energy Summary</h2>
+            <p>Total Rare Energy Used: {total_energy_used['rare']}/{energy_limits['rare']} (Remaining: {remaining_rare})</p>
+            <p>Total Limited Energy Used: {total_energy_used['limited']}/{energy_limits['limited']} (Remaining: {remaining_limited})</p>
+        </div>
+    """
+    
+    # Add missing projections information
+    html_content += """
+        <div class="missing-projections">
+            <h2>PLAYERS LACKING PROJECTIONS</h2>
+    """
+    
+    merged = cards_df.merge(projections_df, left_on="name", right_on="player_name", how="left")
+    missing = merged[merged["total_projection"].isna()]
+    
+    if not missing.empty:
+        html_content += "<p>The following players lack projections:</p><ul>"
+        for _, row in missing.iterrows():
+            html_content += f"<li>{row['name']} (slug: {row['slug']})</li>"
+        html_content += "</ul>"
+    else:
+        html_content += "<p>All players have projections. Great!</p>"
+    
+    # Add sealed cards report at the bottom
+    html_content += """
+        </div>
+        
+        <div class="sealed-cards-report">
+            <h2>SEALED CARDS REPORT</h2>
+    """
+    
+    # Generate sealed cards report but in HTML format
+    sealed_html = generate_sealed_cards_html(username)
+    html_content += sealed_html
+    
+    html_content += """
+        </div>
+    </div>
+    """
+    
+    return html_content
+
+def generate_weather_html():
+    """Generate HTML-formatted weather report for games with high rain probability."""
+    html_content = ""
+    
+    try:
+        high_rain_games = fetch_high_rain_games_details()
+
+        if high_rain_games.empty:
+            html_content += "<p>No games found with a high rain probability (>= 75%) in the forecast.</p>"
+        else:
+            html_content += f"<p>Found {len(high_rain_games)} game(s) with >= 75% rain probability:</p>"
+            html_content += "<p>These games <em>may</em> face delays or postponement:</p>"
+            
+            html_content += "<div class='rain-games'>"
+            for _, game in high_rain_games.iterrows():
+                game_id = int(game['game_id'])
+                stadium_name = game['stadium_name'] if pd.notna(game['stadium_name']) else "Unknown Stadium"
+                away_team = f"Team {game['away_team_id']}"
+                home_team = f"Team {game['home_team_id']}"
+
+                game_date_str = "Date Unknown"
+                try:
+                    # Parse the date string (assuming YYYY-MM-DD format from DB)
+                    game_date_obj = datetime.strptime(str(game['game_date']), '%Y-%m-%d').date()
+                    # Format the date clearly
+                    game_date_str = game_date_obj.strftime("%a, %b %d, %Y") # Format: Fri, Apr 11, 2025
+                except Exception:
+                    pass
+
+                html_content += f"""
+                <div class="rain-game-card">
+                    <p><strong>Forecast:</strong> {game['rain']:.0f}% Rain - <strong>Date:</strong> {game_date_str} - <strong>Location:</strong> {stadium_name}</p>
+                    <p><a href="https://baseballsavant.mlb.com/preview?game_pk={game_id}" target="_blank">Gameday Link</a></p>
+                </div>
+                """
+            html_content += "</div>"
+
+    except Exception as e:
+        html_content += f"<p class='error'>Error generating weather report: {e}</p>"
+    
+    return html_content
+
+def generate_sealed_cards_html(username: str) -> str:
+    """Generate HTML-formatted report of sealed cards with projections and injury info."""
+    html_content = ""
+    db_path = Config.DB_PATH
+    
+    try:
+        # Connect to database
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        
+        # Get current date
+        current_date = datetime.now()
+        html_content += f"<p>Sealed Cards Report generated on: {current_date.strftime('%Y-%m-%d')}</p>"
+        
+        # Get game week dates
+        game_week = Config.GAME_WEEK
+        try:
+            # Parse the game week to get start and end dates
+            start_date_str, end_date_str = game_week.split("_to_")
+            start_date = datetime.strptime(start_date_str, "%Y-%m-%d")
+            end_date = datetime.strptime(end_date_str, "%Y-%m-%d")
+        except:
+            # Fallback to 7 days if game week format is unexpected
+            start_date = current_date
+            end_date = current_date + timedelta(days=7)
+        
+        # Part 1: Sealed cards with projections
+        html_content += """
+        <div class="sealed-projections">
+            <h3>SEALED CARDS WITH UPCOMING PROJECTIONS</h3>
+        """
+        
+        query = """
+        SELECT c.slug, c.name, c.year, c.rarity, c.positions, 
+               COUNT(ap.game_id) as game_count, 
+               SUM(ap.sorare_score) as total_projected_score,
+               AVG(ap.sorare_score) as avg_projected_score,
+               MIN(ap.game_date) as next_game_date
+        FROM cards c
+        JOIN AdjustedProjections ap ON c.name = ap.player_name
+        WHERE c.username = ? AND c.sealed = 1 AND ap.game_date >= ?
+        GROUP BY c.slug, c.name, c.year, c.rarity, c.positions
+        ORDER BY next_game_date ASC
+        """
+        
+        cursor.execute(query, (username, current_date.strftime('%Y-%m-%d')))
+        projection_results = cursor.fetchall()
+        
+        if projection_results:
+            # Convert to DataFrame for better handling
+            columns = ['Slug', 'Name', 'Year', 'Rarity', 'Positions', 
+                      'Upcoming Games', 'Total Projected Score', 'Avg Score/Game', 'Next Game Date']
+            df_projections = pd.DataFrame(projection_results, columns=columns)
+            
+            # Format the dataframe - round the scores to 2 decimal places
+            df_projections['Total Projected Score'] = df_projections['Total Projected Score'].round(2)
+            df_projections['Avg Score/Game'] = df_projections['Avg Score/Game'].round(2)
+            
+            html_content += f"<p>Found {len(df_projections)} distinct sealed cards with upcoming projections:</p>"
+            
+            # Generate HTML table
+            html_content += """
+            <table class="sealed-cards-table">
+                <thead>
+                    <tr>
+                        <th>Name</th>
+                        <th>Year</th>
+                        <th>Rarity</th>
+                        <th>Upcoming Games</th>
+                        <th>Total Score</th>
+                        <th>Avg Score</th>
+                        <th>Next Game</th>
+                    </tr>
+                </thead>
+                <tbody>
+            """
+            
+            for _, row in df_projections.iterrows():
+                html_content += f"""
+                <tr>
+                    <td>{row['Name']}</td>
+                    <td>{row['Year']}</td>
+                    <td>{row['Rarity']}</td>
+                    <td>{row['Upcoming Games']}</td>
+                    <td>{row['Total Projected Score']}</td>
+                    <td>{row['Avg Score/Game']}</td>
+                    <td>{row['Next Game Date']}</td>
+                </tr>
+                """
+                
+            html_content += """
+                </tbody>
+            </table>
+            """
+        else:
+            html_content += "<p>No sealed cards with upcoming projections found.</p>"
+        
+        html_content += "</div>"
+        
+        # Part 2: Injured sealed cards expected back within game week
+        html_content += f"""
+        <div class="injured-sealed-cards">
+            <h3>INJURED SEALED CARDS RETURNING DURING GAME WEEK ({start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')})</h3>
+        """
+        
+        query = """
+        SELECT c.slug, c.name, c.year, c.rarity, c.positions, i.status, 
+               i.description, i.return_estimate, i.team
+        FROM cards c
+        JOIN injuries i ON c.name = i.player_name
+        WHERE c.username = ? AND c.sealed = 1 AND i.return_estimate IS NOT NULL
+        """
+        
+        cursor.execute(query, (username,))
+        injury_results = cursor.fetchall()
+        
+        if injury_results:
+            # Filter injuries with return dates within game week
+            soon_returning = []
+            
+            for result in injury_results:
+                return_estimate = result[7]
+                
+                # Check if return_estimate contains a date string
+                try:
+                    # Try different date formats
+                    for date_format in ['%Y-%m-%d', '%m/%d/%Y', '%d-%m-%Y', '%d/%m/%Y']:
+                        try:
+                            return_date = datetime.strptime(return_estimate, date_format)
+                            if start_date <= return_date <= end_date:
+                                soon_returning.append(result)
+                            break
+                        except ValueError:
+                            continue
+                except:
+                    # If return_estimate isn't a date, check if it contains keywords
+                    # suggesting imminent return during the game week
+                    keywords = ['day to day', 'game time decision', 'probable', 
+                               'questionable', 'today', 'tomorrow', '1-3 days',
+                               'this week', 'expected back', 'returning']
+                    if any(keyword in return_estimate.lower() for keyword in keywords):
+                        soon_returning.append(result)
+            
+            if soon_returning:
+                columns = ['Slug', 'Name', 'Year', 'Rarity', 'Positions', 'Status', 
+                          'Description', 'Return Estimate', 'Team']
+                df_injuries = pd.DataFrame(soon_returning, columns=columns)
+                
+                html_content += f"<p>Found {len(df_injuries)} injured sealed cards expected to return during game week:</p>"
+                
+                # Generate HTML table
+                html_content += """
+                <table class="injured-cards-table">
+                    <thead>
+                        <tr>
+                            <th>Name</th>
+                            <th>Year</th>
+                            <th>Rarity</th>
+                            <th>Status</th>
+                            <th>Description</th>
+                            <th>Return Estimate</th>
+                            <th>Team</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                """
+                
+                for _, row in df_injuries.iterrows():
+                    html_content += f"""
+                    <tr>
+                        <td>{row['Name']}</td>
+                        <td>{row['Year']}</td>
+                        <td>{row['Rarity']}</td>
+                        <td>{row['Status']}</td>
+                        <td>{row['Description']}</td>
+                        <td>{row['Return Estimate']}</td>
+                        <td>{row['Team']}</td>
+                    </tr>
+                    """
+                    
+                html_content += """
+                    </tbody>
+                </table>
+                """
+            else:
+                html_content += "<p>No injured sealed cards expected to return during game week.</p>"
+        else:
+            html_content += "<p>No injured sealed cards found.</p>"
+        
+        html_content += "</div>"
+        conn.close()
+        
+    except sqlite3.Error as e:
+        html_content += f"<p class='error'>Database error: {e}</p>"
+    except Exception as e:
+        html_content += f"<p class='error'>Error: {e}</p>"
+        
+    return html_content
+
+
 def parse_arguments():
     """Parse command line arguments with sensible defaults."""
     parser = argparse.ArgumentParser(description='Sorare MLB Lineup Optimizer')

@@ -10,7 +10,7 @@ import sqlite3
 
 # Import existing functionality
 from chatgpt_lineup_optimizer import (
-    fetch_cards, fetch_projections, build_all_lineups, 
+    fetch_cards, fetch_projections, build_all_lineups, generate_lineups_html, generate_weather_html, 
     save_lineups, Config, get_db_connection,
     generate_sealed_cards_report
 )
@@ -142,7 +142,7 @@ def index():
 
 @app.route('/generate_lineup', methods=['POST'])
 def generate_lineup():
-    """Generate lineup based on form inputs"""
+    """Generate lineup based on form inputs and return HTML content"""
     # Get form data
     username = request.form.get('username')
     rare_energy = int(request.form.get('rare_energy', DEFAULT_ENERGY_LIMITS["rare"]))
@@ -201,36 +201,42 @@ def generate_lineup():
             ignore_list=ignore_list
         )
         
-        # Create directory if it doesn't exist
-        os.makedirs('lineups', exist_ok=True)
+        # Generate weather report HTML (can be cached separately if needed)
+        weather_html = generate_weather_html()
         
-        # Save lineups to a file
-        output_file = f"lineups/{username}.txt"
-        save_lineups(
+        # Generate lineups HTML
+        lineup_html = generate_lineups_html(
             lineups=lineups,
-            output_file=output_file,
             energy_limits=energy_limits,
             username=username,
             boost_2025=boost_2025,
             stack_boost=stack_boost,
             energy_per_card=energy_per_card,
             cards_df=cards_df,
-            projections_df=projections_df
+            projections_df=projections_df,
+            weather_html=weather_html
         )
         
-        # Read the file content
-        with open(output_file, 'r') as f:
-            lineup_content = f.read()
-        
-        # Return success with file content
+        # Return success with HTML content
         return jsonify({
             'success': True,
-            'lineup': lineup_content,
-            'filename': f"{username}.txt"
+            'lineup_html': lineup_html
         })
         
     except Exception as e:
         return jsonify({'error': f"Error generating lineup: {str(e)}"})
+    
+@app.route('/weather_report', methods=['GET'])
+def weather_report():
+    """Generate weather report HTML that can be cached"""
+    try:
+        weather_html = generate_weather_html()
+        return jsonify({
+            'success': True,
+            'weather_html': weather_html
+        })
+    except Exception as e:
+        return jsonify({'error': f"Error generating weather report: {str(e)}"})
     
 @app.route('/fetch_cards', methods=['POST'])
 def fetch_user_cards():

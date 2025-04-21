@@ -15,6 +15,32 @@
             padding-bottom: 40px;
             background-color: #f8f9fa;
         }
+        /* Dark mode for generated content */
+        body.dark-mode .lineup-content {
+            background-color: #1e1e1e;
+            color: #e0e0e0;
+            }
+
+            body.dark-mode .lineup-content table {
+            background-color: #2a2a2a;
+            color: #e0e0e0;
+            border-color: #444;
+            }
+
+            body.dark-mode .lineup-content th,
+            body.dark-mode .lineup-content td {
+            border: 1px solid #444;
+            }
+
+            body.dark-mode .lineup-content h2,
+            body.dark-mode .lineup-content h3,
+            body.dark-mode .lineup-content h4 {
+            color: #f0f0f0;
+            }
+
+            body.dark-mode .lineup-content a {
+            color: #66bfff;
+            }
         .optimizer-container {
             max-width: 960px;
             margin: 0 auto;
@@ -35,9 +61,8 @@
             display: none;
         }
         .lineup-content {
-            white-space: pre-wrap;
-            font-family: monospace;
-            font-size: 0.9rem;
+            font-family: system-ui, sans-serif;
+            font-size: 0.95rem;
             background-color: #f8f9fa;
             padding: 15px;
             border-radius: 5px;
@@ -244,11 +269,7 @@
         <div class="results-container">
             <h3>Lineups for <span id="results-username"></span></h3>
             <p>Game Week: {{ game_week }}</p>
-            
-            <div class="d-grid gap-2 mb-3">
-                <a id="downloadBtn" href="#" class="btn btn-success">Download Lineup File</a>
-            </div>
-            
+                       
             <div class="lineup-content" id="lineupResults"></div>
         </div>
     </div>
@@ -256,11 +277,11 @@
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/js/bootstrap.bundle.min.js"></script>
     <script>
         document.addEventListener('DOMContentLoaded', function () {
-
+            // Dark mode functionality
             const toggle = document.getElementById('darkModeToggle');
             const body = document.body;
 
-            // Apply stored mode
+            // Apply stored dark mode
             if (localStorage.getItem('darkMode') === 'true') {
                 body.classList.add('dark-mode');
                 toggle.checked = true;
@@ -268,46 +289,222 @@
 
             toggle.addEventListener('change', function () {
                 if (toggle.checked) {
-                body.classList.add('dark-mode');
-                localStorage.setItem('darkMode', 'true');
+                    body.classList.add('dark-mode');
+                    localStorage.setItem('darkMode', 'true');
                 } else {
-                body.classList.remove('dark-mode');
-                localStorage.setItem('darkMode', 'false');
+                    body.classList.remove('dark-mode');
+                    localStorage.setItem('darkMode', 'false');
                 }
             });
 
+            // Get references to DOM elements for lineup management
             const active = document.getElementById('activeLineup');
             const inactive = document.getElementById('inactiveLineup');
             const lineupInput = document.getElementById('lineup_order');
+            const usernameInput = document.getElementById('username');
+            const form = document.getElementById('lineupForm');
 
+            // Track manual changes to prevent automatic overwriting
+            let hasManualChanges = false;
+
+            // Save the last used username
+            function saveLastUsername(username) {
+                if (username && username.trim()) {
+                    localStorage.setItem('sorare-last-username', username.trim());
+                }
+            }
+
+            // Load the last used username
+            function loadLastUsername() {
+                const lastUsername = localStorage.getItem('sorare-last-username');
+                if (lastUsername) {
+                    usernameInput.value = lastUsername;
+                    return lastUsername;
+                }
+                return null;
+            }
+
+            // Save lineup configuration
+            function saveLineupConfiguration() {
+                const username = usernameInput.value.trim();
+                if (!username) return false; // Don't save if no username
+                
+                // Save username
+                saveLastUsername(username);
+                
+                const activeItems = Array.from(active.querySelectorAll('li')).map(item => item.textContent.trim());
+                const inactiveItems = Array.from(inactive.querySelectorAll('li')).map(item => item.textContent.trim());
+                
+                const config = {
+                    active: activeItems,
+                    inactive: inactiveItems,
+                    timestamp: Date.now()
+                };
+                
+                // Save with username as key
+                localStorage.setItem(`sorare-lineup-${username}`, JSON.stringify(config));
+                return true;
+            }
+
+            // Load lineup configuration
+            function loadLineupConfiguration(username) {
+                const savedConfig = localStorage.getItem(`sorare-lineup-${username}`);
+                if (!savedConfig) return false;
+                
+                // If user has made manual changes, ask before overwriting
+                if (hasManualChanges) {
+                    const loadSaved = confirm("You have unsaved changes to your current lineup. Do you want to load your saved lineup for this username instead?");
+                    if (!loadSaved) return false;
+                }
+                
+                try {
+                    const config = JSON.parse(savedConfig);
+                    
+                    // Clear current lineups - move everything to inactive first
+                    while (active.children.length > 0) {
+                        inactive.appendChild(active.children[0]);
+                    }
+                    
+                    // Restore saved active lineup items
+                    config.active.forEach(itemText => {
+                        const matchingItem = Array.from(inactive.querySelectorAll('li')).find(
+                            li => li.textContent.trim() === itemText
+                        );
+                        if (matchingItem) {
+                            active.appendChild(matchingItem);
+                        }
+                    });
+                    
+                    // Update the hidden input
+                    updateLineupOrder(false); // Don't mark as manual changes when loading
+                    return true;
+                } catch (e) {
+                    console.error("Error loading saved lineup configuration:", e);
+                    return false;
+                }
+            }
+
+            // Update the lineup order and hidden input
+            function updateLineupOrder(isManual = true) {
+                const items = active.querySelectorAll('li');
+                const lineup = Array.from(items).map(item => item.textContent.trim());
+                lineupInput.value = lineup.join(', ');
+                
+                // Mark as having manual changes if this was a user action
+                if (isManual) {
+                    hasManualChanges = true;
+                }
+                
+                // Auto-save if username is provided
+                if (usernameInput.value.trim() && isManual) {
+                    saveLineupConfiguration();
+                    hasManualChanges = false;
+                }
+            }
+
+            // Add a temporary message to notify the user
+            function showMessage(message, type = 'info') {
+                const existingMessage = document.querySelector('.temp-message');
+                if (existingMessage) {
+                    existingMessage.remove();
+                }
+                
+                const messageDiv = document.createElement('div');
+                messageDiv.className = `alert alert-${type} mt-2 temp-message`;
+                messageDiv.textContent = message;
+                
+                const formContainer = document.querySelector('.form-container');
+                formContainer.insertAdjacentElement('afterend', messageDiv);
+                
+                setTimeout(() => {
+                    messageDiv.remove();
+                }, 3000);
+            }
+
+            // Initialize Sortable.js
             const sortableOptions = {
                 group: 'lineups',
                 animation: 150,
                 multiDrag: true,
                 selectedClass: 'bg-info text-white',
-                onSort: updateLineupOrder,
-                onAdd: updateLineupOrder,
-                onRemove: updateLineupOrder
+                onSort: function() { updateLineupOrder(true); },
+                onAdd: function() { updateLineupOrder(true); },
+                onRemove: function() { updateLineupOrder(true); }
             };
 
             new Sortable(active, sortableOptions);
             new Sortable(inactive, sortableOptions);
 
-            function updateLineupOrder() {
-                const items = active.querySelectorAll('li');
-                const lineup = Array.from(items).map(item => item.textContent.trim());
-                lineupInput.value = lineup.join(', ');
+            // Add "Save Current Lineup" button
+            const formActions = document.querySelector('.d-grid.gap-2');
+            
+            if (!document.getElementById('saveLineupBtn')) {
+                const saveButton = document.createElement('button');
+                saveButton.id = 'saveLineupBtn';
+                saveButton.type = 'button';
+                saveButton.className = 'btn btn-outline-success mt-2';
+                saveButton.textContent = 'Save Current Lineup';
+                saveButton.addEventListener('click', function() {
+                    const username = usernameInput.value.trim();
+                    if (!username) {
+                        showMessage('Please enter a username to save your lineup', 'warning');
+                        usernameInput.focus();
+                        return;
+                    }
+                    
+                    if (saveLineupConfiguration()) {
+                        hasManualChanges = false;
+                        showMessage(`Lineup saved for ${username}`, 'success');
+                    }
+                });
+                formActions.appendChild(saveButton);
             }
 
-            updateLineupOrder();
+            // Add "Clear Saved Data" button
+            if (!document.getElementById('clearDataBtn')) {
+                const clearButton = document.createElement('button');
+                clearButton.id = 'clearDataBtn';
+                clearButton.type = 'button';
+                clearButton.className = 'btn btn-outline-secondary mt-2';
+                clearButton.textContent = 'Clear Saved Data';
+                clearButton.addEventListener('click', function() {
+                    if (confirm('This will clear your saved username and lineup configuration. Continue?')) {
+                        const username = usernameInput.value.trim();
+                        if (username) {
+                            localStorage.removeItem(`sorare-lineup-${username}`);
+                        }
+                        localStorage.removeItem('sorare-last-username');
+                        usernameInput.value = '';
+                        showMessage('All saved data has been cleared', 'info');
+                        
+                        // Reset lineups to default
+                        while (active.children.length > 0) {
+                            inactive.appendChild(active.children[0]);
+                        }
+                        updateLineupOrder(false);
+                        hasManualChanges = false;
+                    }
+                });
+                formActions.appendChild(clearButton);
+            }
 
-            // Check database status
-            checkDatabaseStatus();
-            
-            // Form submission
-            const form = document.getElementById('lineupForm');
+            // Handle username change
+            let usernameChangeTimer;
+            usernameInput.addEventListener('input', function() {
+                clearTimeout(usernameChangeTimer);
+                usernameChangeTimer = setTimeout(() => {
+                    const username = this.value.trim();
+                    if (username) {
+                        loadLineupConfiguration(username);
+                    }
+                }, 1000); // Wait 1 second after typing stops
+            });
+
+            // Handle form submission
             form.addEventListener('submit', function(e) {
                 e.preventDefault();
+
+                saveLineupConfiguration();
                 
                 // Show loading spinner
                 document.querySelector('.loading').style.display = 'block';
@@ -327,81 +524,101 @@
                 })
                 .then(response => response.json())
                 .then(data => {
-                    // Hide loading spinner
                     document.querySelector('.loading').style.display = 'none';
-                    
+
                     if (data.error) {
                         alert(data.error);
                         return;
                     }
-                    
-                    // Show results
+
                     document.getElementById('results-username').textContent = formData.get('username');
-                    document.getElementById('lineupResults').textContent = data.lineup;
+                    document.getElementById('lineupResults').innerHTML = data.lineup_html;
                     document.querySelector('.results-container').style.display = 'block';
-                    
-                    // Update download link
-                    const downloadBtn = document.getElementById('downloadBtn');
-                    downloadBtn.href = `/download_lineup/${formData.get('username')}`;
                 })
                 .catch(error => {
                     document.querySelector('.loading').style.display = 'none';
                     alert(`Error: ${error.message}`);
                 });
             });
-            
-            // Update data button
-            document.getElementById('updateDataBtn').addEventListener('click', function() {
-                if (!confirm('This will update injury data and projections. It may take a few minutes. Continue?')) {
-                    return;
+
+            // Add warning when leaving with unsaved changes
+            window.addEventListener('beforeunload', function(e) {
+                if (hasManualChanges && !usernameInput.value.trim()) {
+                    const message = 'You have unsaved lineup changes. Enter a username and save to keep them.';
+                    e.returnValue = message;
+                    return message;
                 }
-                
-                // Show loading spinner
-                document.querySelector('.loading').style.display = 'block';
-                document.getElementById('loadingMessage').textContent = 'Updating data... This may take several minutes.';
-                
-                // Send update request
-                fetch('/update_data', {
-                    method: 'POST'
-                })
-                .then(response => response.json())
-                .then(data => {
-                    document.querySelector('.loading').style.display = 'none';
-                    
-                    if (data.error) {
-                        alert(data.error);
-                    } else {
-                        alert(data.message);
-                        // Refresh page to update game week display
-                        window.location.reload();
-                    }
-                })
-                .catch(error => {
-                    document.querySelector('.loading').style.display = 'none';
-                    alert(`Error: ${error.message}`);
-                });
             });
-            
+
+            // Initial setup - load last username if available
+            const lastUsername = loadLastUsername();
+            if (lastUsername) {
+                setTimeout(() => {
+                    loadLineupConfiguration(lastUsername);
+                }, 100);
+            }
+
+            // Make sure lineup input is updated on page load
+            updateLineupOrder(false);
+
+            // Check database status
+            function checkDatabaseStatus() {
+                fetch('/check_db')
+                    .then(response => response.json())
+                    .then(data => {
+                        const statusDiv = document.querySelector('.db-status');
+                        const generateBtn = document.getElementById('generateBtn');
+                        const dbInitContainer = document.getElementById('dbInitContainer');
+                        
+                        if (data.status === 'connected') {
+                            statusDiv.className = 'db-status alert alert-success';
+                            statusDiv.innerHTML = `
+                                <strong>Database Connected:</strong> 
+                                Game Week: ${data.game_week} | 
+                                Tables: ${data.tables.join(', ')} | 
+                                Projections: ${data.projection_count}
+                            `;
+                            generateBtn.disabled = false;
+                            dbInitContainer.style.display = 'none';
+                        } else if (data.status === 'missing') {
+                            statusDiv.className = 'db-status alert alert-warning';
+                            statusDiv.innerHTML = `
+                                <strong>Database Not Ready:</strong> 
+                                ${data.message}
+                            `;
+                            generateBtn.disabled = true;
+                            dbInitContainer.style.display = 'block';
+                        } else {
+                            statusDiv.className = 'db-status alert alert-danger';
+                            statusDiv.textContent = `Database Error: ${data.message}`;
+                            generateBtn.disabled = true;
+                        }
+                    })
+                    .catch(error => {
+                        const statusDiv = document.querySelector('.db-status');
+                        statusDiv.className = 'db-status alert alert-danger';
+                        statusDiv.textContent = `Error checking database: ${error}`;
+                        document.getElementById('generateBtn').disabled = true;
+                    });
+            }
+
             // Full database refresh button
             document.getElementById('fullRefreshBtn').addEventListener('click', function() {
                 if (!confirm('WARNING: This will completely refresh the database from scratch, downloading all data and recreating projections. This process will take several minutes. Continue?')) {
                     return;
                 }
-                
                 runFullUpdate();
             });
-            
+
             // Initialize database button
             document.getElementById('fullUpdateBtn').addEventListener('click', function() {
                 runFullUpdate();
             });
-            
+
             function runFullUpdate() {
-                // Show loading spinner
                 document.querySelector('.loading').style.display = 'block';
                 document.getElementById('loadingMessage').textContent = 'Initializing database... This will take several minutes.';
                 
-                // Send full update request
                 fetch('/run_full_update', {
                     method: 'POST'
                 })
@@ -413,7 +630,6 @@
                         alert(data.error);
                     } else {
                         alert(data.message);
-                        // Refresh page to update status
                         window.location.reload();
                     }
                 })
@@ -422,59 +638,8 @@
                     alert(`Error: ${error.message}`);
                 });
             }
-            
-            function checkDatabaseStatus() {
-                fetch('/check_db')
-                    .then(response => response.json())
-                    .then(data => {
-                        const statusDiv = document.querySelector('.db-status');
-                        const generateBtn = document.getElementById('generateBtn');
-                        const dbInitContainer = document.getElementById('dbInitContainer');
-                        
-                        if (data.status === 'connected') {
-                            // Database exists and is properly configured
-                            statusDiv.className = 'db-status alert alert-success';
-                            statusDiv.innerHTML = `
-                                <strong>Database Connected:</strong> 
-                                Game Week: ${data.game_week} | 
-                                Tables: ${data.tables.join(', ')} | 
-                                Projections: ${data.projection_count}
-                            `;
-                            
-                            // Enable lineup generation
-                            generateBtn.disabled = false;
-                            dbInitContainer.style.display = 'none';
-                            
-                        } else if (data.status === 'missing') {
-                            // Database doesn't exist or needs initialization
-                            statusDiv.className = 'db-status alert alert-warning';
-                            statusDiv.innerHTML = `
-                                <strong>Database Not Ready:</strong> 
-                                ${data.message}
-                            `;
-                            
-                            // Disable lineup generation and show init container
-                            generateBtn.disabled = true;
-                            dbInitContainer.style.display = 'block';
-                            
-                        } else {
-                            // Some other error
-                            statusDiv.className = 'db-status alert alert-danger';
-                            statusDiv.textContent = `Database Error: ${data.message}`;
-                            
-                            // Disable lineup generation
-                            generateBtn.disabled = true;
-                        }
-                    })
-                    .catch(error => {
-                        const statusDiv = document.querySelector('.db-status');
-                        statusDiv.className = 'db-status alert alert-danger';
-                        statusDiv.textContent = `Error checking database: ${error}`;
-                        
-                        // Disable lineup generation on error
-                        document.getElementById('generateBtn').disabled = true;
-                    });
-            }
+
+            checkDatabaseStatus();
         });
     </script>
 </body>
