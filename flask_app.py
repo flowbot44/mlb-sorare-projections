@@ -120,8 +120,10 @@ def run_full_update():
         subprocess.run(["python3", os.path.join(script_dir, "update_stadiums.py")], check=True)
         
         # Step 5: Update injury data
-        fetch_injury_data()
-            
+        injury_data = fetch_injury_data()
+        if injury_data:
+            update_database(injury_data)
+        
         # Step 6: Update projections using existing function
         update_projections()
 
