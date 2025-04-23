@@ -98,7 +98,7 @@ try:
 
     # Check for required columns for calculations
     required_hitter_cols = ['G', 'R', 'RBI', '1B', '2B', '3B', 'HR', 'BB', 'SO', 'SB', 'CS', 'HBP']
-    required_pitcher_cols = ['G', 'IP', 'SO', 'H', 'ER', 'BB', 'HBP', 'W', 'R', 'SV']
+    required_pitcher_cols = ['G', 'IP', 'SO', 'H', 'ER', 'BB', 'HBP', 'W', 'R', 'SV', 'HLD']
 
     # Map column names for calculations if needed
     # For example, if 'K' is used instead of 'SO' in the data
@@ -188,11 +188,11 @@ try:
         
         if games == 0:
             # Set all stats to 0 if games is 0
-            for stat in ['IP', 'SO', 'H', 'ER', 'BB', 'HBP', 'W', 'R', 'SV']:
+            for stat in ['IP', 'SO', 'H', 'ER', 'BB', 'HBP', 'W', 'R', 'SV', 'HLD']:
                 result[f'{stat}_per_game'] = 0.0
         else:
             # Calculate per game stats
-            for stat in ['IP', 'H', 'ER', 'BB', 'HBP', 'W', 'R']:
+            for stat in ['IP', 'H', 'ER', 'BB', 'HBP', 'W', 'R', 'HLD']:
                 value = safe_get_col(row, stat, pitcher_col_map)
                 result[f'{stat}_per_game'] = value / games
             

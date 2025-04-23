@@ -60,3 +60,10 @@ def determine_game_week(current_date=None):
             end_date = start_date + timedelta(days=3)
 
     return f"{start_date.strftime('%Y-%m-%d')}_to_{end_date.strftime('%Y-%m-%d')}"
+
+
+def main():
+    print(determine_game_week())
+
+if __name__ == "__main__":
+    main()

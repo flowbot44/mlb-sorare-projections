@@ -1,0 +1,58 @@
+body.dark-mode {
+    background-color: #121212;
+    color: #e0e0e0;
+}
+
+.dark-mode .form-container,
+.dark-mode .results-container,
+.dark-mode .db-init-container,
+.dark-mode .list-group-item {
+    background-color: #1e1e1e;
+    color: #e0e0e0;
+    border-color: #333;
+}
+
+.dark-mode .list-group-item.bg-info {
+    background-color: #0d6efd !important;
+    color: #fff;
+}
+
+.dark-mode .btn {
+    border-color: #555;
+}
+
+.dark-mode .btn-outline-danger {
+    color: #ff6b6b;
+    border-color: #ff6b6b;
+}
+
+.dark-mode .btn-outline-danger:hover {
+    background-color: #ff6b6b;
+    color: white;
+}
+
+body.dark-mode .lineup-content {
+    background-color: #1e1e1e;
+    color: #e0e0e0;
+}
+
+body.dark-mode .lineup-content table {
+    background-color: #2a2a2a;
+    color: #e0e0e0;
+    border-color: #444;
+}
+
+body.dark-mode .lineup-content th,
+body.dark-mode .lineup-content td {
+    border: 1px solid #444;
+}
+
+body.dark-mode .lineup-content h2,
+body.dark-mode .lineup-content h3,
+body.dark-mode .lineup-content h4 {
+    color: #f0f0f0;
+}
+
+body.dark-mode .lineup-content a {
+    color: #66bfff;
+}
