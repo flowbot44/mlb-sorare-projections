@@ -1,0 +1,91 @@
+body {
+    padding-top: 20px;
+    padding-bottom: 40px;
+    background-color: #f8f9fa;
+}
+
+.optimizer-container {
+    max-width: 960px;
+    margin: 0 auto;
+}
+
+.form-container {
+    background-color: white;
+    border-radius: 8px;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    padding: 20px;
+    margin-bottom: 20px;
+}
+
+.results-container {
+    background-color: white;
+    border-radius: 8px;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    padding: 20px;
+    margin-bottom: 20px;
+    display: none;
+}
+
+.lineup-content {
+    font-family: system-ui, sans-serif;
+    font-size: 0.95rem;
+    background-color: #f8f9fa;
+    padding: 15px;
+    border-radius: 5px;
+    max-height: 600px;
+    overflow-y: auto;
+}
+
+.loading {
+    text-align: center;
+    padding: 20px;
+    display: none;
+}
+
+.db-status {
+    font-size: 0.8rem;
+    margin-bottom: 15px;
+}
+
+.db-init-container {
+    background-color: #fff3cd;
+    border-radius: 8px;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    padding: 20px;
+    margin-bottom: 20px;
+    display: none;
+}
+
+.lineup-order-container {
+    background-color: #f8f9fa;
+    border-radius: 5px;
+    padding: 15px;
+    margin-bottom: 15px;
+    max-height: 300px;
+    overflow-y: auto;
+}
+
+.card-tier {
+    margin-bottom: 5px;
+    font-weight: 500;
+}
+
+.rare-tier {
+    color: #0d6efd;
+}
+
+.limited-tier {
+    color: #198754;
+}
+
+.common-tier {
+    color: #6c757d;
+}
+
+#activeLineup,
+#inactiveLineup {
+    min-height: 200px;
+    border: 1px dashed #ccc;
+    padding: 10px;
+    border-radius: 5px;
+}

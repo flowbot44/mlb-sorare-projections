@@ -118,6 +118,7 @@ def populate_player_teams(conn, start_date, end_date, update_rosters=False):
             print(f"Error fetching roster for team {team_id}: {e}")
     
     conn.commit()
+    add_projected_starting_pitchers(conn, start_date, end_date)
 
 # --- Weather Functions ---
 def get_weather_nws(lat, lon, forecast_time):
@@ -491,6 +492,98 @@ def process_pitcher(conn, game_data, pitcher_data, injuries, game_week_id, is_st
             (player_name, mlbam_id, game_id, game_date, sorare_score, game_week, team_id) 
             VALUES (?, ?, ?, ?, ?, ?, ?)
         """, (player_name, mlbam_id, game_id, game_date, final_score, game_week_id, player_team_id))
+
+def add_projected_starting_pitchers(conn, start_date, end_date):
+    """
+    Adds projected starting pitchers to the PlayerTeams table even if they're not on active rosters yet.
+    This will allow the system to use their existing projections from pitchers_per_game.
+    """
+    print("Adding projected starting pitchers to PlayerTeams...")
+    c = conn.cursor()
+    
+    # Get games in the date range
+    games = c.execute("""
+        SELECT id, date, home_team_id, away_team_id, home_probable_pitcher_id, away_probable_pitcher_id 
+        FROM Games WHERE date BETWEEN ? AND ?
+    """, (start_date, end_date)).fetchall()
+    
+    pitcher_count = 0
+    
+    for game in games:
+        game_id, game_date, home_team_id, away_team_id, home_pitcher_id, away_pitcher_id = game
+        
+        # Process home pitcher if specified
+        if home_pitcher_id and home_pitcher_id != 'None':
+            # Check if the pitcher is already in PlayerTeams
+            existing = c.execute("SELECT COUNT(*) FROM PlayerTeams WHERE player_id = ?", 
+                                (home_pitcher_id,)).fetchone()[0]
+            
+            if existing == 0:
+                # Pitcher not in PlayerTeams, fetch their details from MLB API
+                try:
+                    url = f"https://statsapi.mlb.com/api/v1/people/{home_pitcher_id}"
+                    response = requests.get(url)
+                    player_data = response.json()
+                    
+                    if 'people' in player_data and len(player_data['people']) > 0:
+                        player = player_data['people'][0]
+                        player_name = normalize_name(player['fullName'])
+                        
+                        # Check if this player exists in pitchers_per_game
+                        pitcher_exists = c.execute("""
+                            SELECT COUNT(*) FROM pitchers_per_game 
+                            WHERE Name = ? OR MLBAMID = ?
+                        """, (player['fullName'], home_pitcher_id)).fetchone()[0]
+                        
+                        if pitcher_exists > 0:
+                            # Add to the PlayerTeams table to connect them to their stats
+                            c.execute("""
+                                INSERT INTO PlayerTeams (player_id, player_name, team_id, mlbam_id)
+                                VALUES (?, ?, ?, ?)
+                            """, (str(home_pitcher_id), player_name, home_team_id, str(home_pitcher_id)))
+                            
+                            pitcher_count += 1
+                            print(f"Added projected starter: {player_name} (ID: {home_pitcher_id}) to team {home_team_id}")
+                except Exception as e:
+                    print(f"Error fetching pitcher {home_pitcher_id} data: {e}")
+        
+        # Process away pitcher if specified
+        if away_pitcher_id and away_pitcher_id != 'None':
+            # Check if the pitcher is already in PlayerTeams
+            existing = c.execute("SELECT COUNT(*) FROM PlayerTeams WHERE player_id = ?", 
+                                (away_pitcher_id,)).fetchone()[0]
+            
+            if existing == 0:
+                # Pitcher not in PlayerTeams, fetch their details from MLB API
+                try:
+                    url = f"https://statsapi.mlb.com/api/v1/people/{away_pitcher_id}"
+                    response = requests.get(url)
+                    player_data = response.json()
+                    
+                    if 'people' in player_data and len(player_data['people']) > 0:
+                        player = player_data['people'][0]
+                        player_name = normalize_name(player['fullName'])
+                        
+                        # Check if this player exists in pitchers_per_game
+                        pitcher_exists = c.execute("""
+                            SELECT COUNT(*) FROM pitchers_per_game 
+                            WHERE Name = ? OR MLBAMID = ?
+                        """, (player['fullName'], away_pitcher_id)).fetchone()[0]
+                        
+                        if pitcher_exists > 0:
+                            # Add to the PlayerTeams table to connect them to their stats
+                            c.execute("""
+                                INSERT INTO PlayerTeams (player_id, player_name, team_id, mlbam_id)
+                                VALUES (?, ?, ?, ?)
+                            """, (str(away_pitcher_id), player_name, away_team_id, str(away_pitcher_id)))
+                            
+                            pitcher_count += 1
+                            print(f"Added projected starter: {player_name} (ID: {away_pitcher_id}) to team {away_team_id}")
+                except Exception as e:
+                    print(f"Error fetching pitcher {away_pitcher_id} data: {e}")
+    
+    conn.commit()
+    print(f"Added {pitcher_count} projected starting pitchers to PlayerTeams")
 
 # --- Updates to the main functions ---
 def calculate_adjustments(conn, start_date, end_date, game_week_id):

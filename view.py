@@ -1,5 +1,5 @@
 import sqlite3
-from .utils import DATABASE_FILE  # Assuming utils.py is in the same directory
+from utils import DATABASE_FILE  # Assuming utils.py is in the same directory
 
 
 
@@ -44,8 +44,11 @@ def get_all_games():
 
 def get_all_projections():
     conn = sqlite3.connect(db_path)  # Create/connect to the database file
+ 
+    #cursor = conn.execute("SELECT * FROM AdjustedProjections WHERE player_name IN ('NICK PIVETTA','TANNER BIBEE')")
 
-    cursor = conn.execute("SELECT * FROM AdjustedProjections WHERE player_name IN ('JONAH HEIM','JAKE ROGERS')")
+    #cursor = conn.execute("PRAGMA table_info(pitchers_per_game)")
+    cursor = conn.execute("SELECT IP_per_game, H_per_game, ER_per_game, BB_per_game, HBP_per_game, W_per_game, K_per_game FROM pitchers_per_game WHERE name IN ('NICK PIVETTA','TANNER BIBEE')")
 
     for row in cursor:
         print(row) #This will print tuples of the rows in the db.
@@ -95,10 +98,10 @@ def get_best_players():
 def main():
     #get_all_players()
     #get_cards_with_injuries()
-    #get_all_projections()
+    get_all_projections()
     #get_all_teams()
     #get_best_players()
-    get_all_games()
+    #get_all_games()
 
 if __name__ == "__main__":
     main()
