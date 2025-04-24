@@ -222,9 +222,9 @@ def fetch_weather_and_store(conn, start_date, end_date):
 def get_wind_effect(orientation, wind_dir, wind_speed):
     angle_diff = (wind_dir - orientation + 180) % 360 - 180
     if abs(angle_diff) < 45 and wind_speed > 10:
-        return 1.1
-    elif abs(angle_diff) > 135 and wind_speed > 10:
         return 0.9
+    elif abs(angle_diff) > 135 and wind_speed > 10:
+        return 1.1
     return 1.0
 
 def get_wind_effect_label(orientation, wind_dir):
@@ -236,9 +236,9 @@ def get_wind_effect_label(orientation, wind_dir):
 
     angle_diff = (wind_dir - orientation + 180) % 360 - 180
     if abs(angle_diff) < 45:
-        return "Out"
-    elif abs(angle_diff) > 135:
         return "In"
+    elif abs(angle_diff) > 135:
+        return "Out"
     else:
         return "Neutral"
 
