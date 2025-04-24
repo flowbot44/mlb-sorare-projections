@@ -229,7 +229,7 @@ def get_wind_effect(orientation, wind_dir, wind_speed):
 
 def get_wind_effect_label(orientation, wind_dir):
     """
-    Determines the wind effect label ("Out", "In", "Neutral") based on the stadium's orientation and wind direction.
+    Determines the wind effect label ("Out", "In", "Cross") based on the stadium's orientation and wind direction.
     """
     if orientation is None or wind_dir is None:
         return "Neutral"
@@ -240,7 +240,7 @@ def get_wind_effect_label(orientation, wind_dir):
     elif abs(angle_diff) > 135:
         return "Out"
     else:
-        return "Neutral"
+        return "Cross"
 
 def get_temp_adjustment(temp):
     if temp > 80:
