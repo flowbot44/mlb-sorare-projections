@@ -379,11 +379,166 @@ def full_update_route():
             })
     except Exception as e:
         return jsonify({'error': f"Error during full update: {str(e)}"})
+    
+def create_teams_table():
+    """Create and populate the Teams table if it doesn't exist"""
+    conn = sqlite3.connect(DATABASE_FILE)
+    c = conn.cursor()
+    
+    # Create Teams table if it doesn't exist
+    c.execute('''CREATE TABLE IF NOT EXISTS Teams 
+                 (id INTEGER PRIMARY KEY, name TEXT, abbreviation TEXT)''')
+    
+    # Check if table is empty
+    count = c.execute("SELECT COUNT(*) FROM Teams").fetchone()[0]
+    
+    if count == 0:
+        # MLB team data
+        teams = [
+            (108, "Los Angeles Angels", "LAA"),
+            (109, "Arizona Diamondbacks", "ARI"),
+            (110, "Baltimore Orioles", "BAL"),
+            (111, "Boston Red Sox", "BOS"),
+            (112, "Chicago Cubs", "CHC"),
+            (113, "Cincinnati Reds", "CIN"),
+            (114, "Cleveland Guardians", "CLE"),
+            (115, "Colorado Rockies", "COL"),
+            (116, "Detroit Tigers", "DET"),
+            (117, "Houston Astros", "HOU"),
+            (118, "Kansas City Royals", "KC"),
+            (119, "Los Angeles Dodgers", "LAD"),
+            (120, "Washington Nationals", "WSH"),
+            (121, "New York Mets", "NYM"),
+            (133, "Oakland Athletics", "OAK"),
+            (134, "Pittsburgh Pirates", "PIT"),
+            (135, "San Diego Padres", "SD"),
+            (136, "Seattle Mariners", "SEA"),
+            (137, "San Francisco Giants", "SF"),
+            (138, "St. Louis Cardinals", "STL"),
+            (139, "Tampa Bay Rays", "TB"),
+            (140, "Texas Rangers", "TEX"),
+            (141, "Toronto Blue Jays", "TOR"),
+            (142, "Minnesota Twins", "MIN"),
+            (143, "Philadelphia Phillies", "PHI"),
+            (144, "Atlanta Braves", "ATL"),
+            (145, "Chicago White Sox", "CWS"),
+            (146, "Miami Marlins", "MIA"),
+            (147, "New York Yankees", "NYY"),
+            (158, "Milwaukee Brewers", "MIL")
+        ]
+        
+        # Insert team data
+        c.executemany("INSERT INTO Teams (id, name, abbreviation) VALUES (?, ?, ?)", teams)
+        conn.commit()
+        print(f"Populated Teams table with {len(teams)} MLB teams")
+    
+    conn.close()
+
+@app.route('/projections')
+@app.route('/projections/<game_week_id>')
+def show_projections(game_week_id=None):
+    create_teams_table()
+    conn = sqlite3.connect(DATABASE_FILE)
+    conn.row_factory = sqlite3.Row
+    c = conn.cursor()
+    
+    # If no game week specified, use current one
+    if not game_week_id:
+        current_date = datetime.now().date()
+        game_week_id = determine_game_week(current_date)
+    
+    start_date, end_date = game_week_id.split('_to_')
+    
+    # Get all games in the date range
+    games = c.execute("""
+        SELECT g.id, g.date, g.time, g.home_team_id, g.away_team_id, 
+               ht.name AS home_team_name, at.name AS away_team_name,
+               s.name AS stadium_name, g.wind_effect_label
+        FROM Games g
+        JOIN Teams ht ON g.home_team_id = ht.id
+        JOIN Teams at ON g.away_team_id = at.id
+        JOIN Stadiums s ON g.stadium_id = s.id
+        WHERE g.date BETWEEN ? AND ?
+        ORDER BY g.date, g.time
+    """, (start_date, end_date)).fetchall()
+    
+    # Get all projections for each game
+    game_projections = {}
+    for game in games:
+        game_id = game['id']
+        
+        # Get home team projections
+        home_players = c.execute("""
+            SELECT ap.player_name, ap.sorare_score,
+                h.R_per_game, h.RBI_per_game, h.HR_per_game,
+                h.SB_per_game, h.CS_per_game, h.BB_per_game as h_BB_per_game, h.HBP_per_game as h_HBP_per_game,
+                `1B_per_game` as h_1B_per_game, `2B_per_game` as h_2B_per_game,
+                `3B_per_game` as h_3B_per_game, h.K_per_game as h_K_per_game,
+                p.IP_per_game, p.K_per_game,  p.W_per_game, p.S_per_game, p.HLD_per_game,
+                p.H_per_game, p.ER_per_game, p.BB_per_game, p.HBP_per_game,
+                CASE WHEN p.IP_per_game > 0 THEN 'P' ELSE 'H' END as position
+            FROM AdjustedProjections ap
+            LEFT JOIN hitters_per_game h ON ap.mlbam_id = h.MLBAMID
+            LEFT JOIN pitchers_per_game p ON ap.mlbam_id = p.MLBAMID
+            WHERE ap.game_id = ? AND ap.team_id = ?
+            ORDER BY ap.sorare_score DESC
+        """, (game_id, game['home_team_id'])).fetchall()
+        
+        # Get away team projections
+        away_players = c.execute("""
+            SELECT ap.player_name, ap.sorare_score, 
+                   h.R_per_game, h.RBI_per_game, h.HR_per_game,
+                   h.SB_per_game, h.CS_per_game, h.BB_per_game as h_BB_per_game, h.HBP_per_game as h_HBP_per_game,
+                   `1B_per_game` as h_1B_per_game, `2B_per_game` as h_2B_per_game, 
+                                 `3B_per_game` as h_3B_per_game, h.K_per_game as h_K_per_game,
+                   p.IP_per_game, p.K_per_game, p.W_per_game, p.S_per_game, p.HLD_per_game,
+                   p.H_per_game, p.ER_per_game, p.BB_per_game, p.HBP_per_game,
+                   CASE WHEN p.IP_per_game > 0 THEN 'P' ELSE 'H' END as position
+            FROM AdjustedProjections ap
+            LEFT JOIN hitters_per_game h ON ap.mlbam_id = h.MLBAMID
+            LEFT JOIN pitchers_per_game p ON ap.mlbam_id = p.MLBAMID
+            WHERE ap.game_id = ? AND ap.team_id = ?
+            ORDER BY ap.sorare_score DESC
+        """, (game_id, game['away_team_id'])).fetchall()
+        
+        # Get weather data
+        weather = c.execute("""
+            SELECT wind_dir, wind_speed, temp, rain
+            FROM WeatherForecasts
+            WHERE game_id = ?
+        """, (game_id,)).fetchone()
+        
+        game_projections[game_id] = {
+            'game_info': game,
+            'home_players': home_players,
+            'away_players': away_players,
+            'weather': weather
+        }
+    
+    # Get available game weeks for navigation
+    game_weeks = c.execute("""
+        SELECT DISTINCT game_week 
+        FROM AdjustedProjections 
+        ORDER BY game_date
+    """).fetchall()
+    
+    conn.close()
+    
+    return render_template('projections.html', 
+                          games=games,
+                          game_projections=game_projections, 
+                          current_game_week=game_week_id,
+                          game_weeks=game_weeks)
+
+
+@app.template_filter('score_to_width')
+def score_to_width(score):
+    return min(float(score) * 2, 100)
 
 if __name__ == '__main__':
     # Ensure the lineups directory exists
     os.makedirs('lineups', exist_ok=True)
-    
+    create_teams_table()
     # Get port from environment variable (for deployment) or default to 5000
     port = int(os.environ.get('PORT', 5000))
     

@@ -27,7 +27,7 @@ def init_db():
     c.execute('''CREATE TABLE IF NOT EXISTS Games 
                  (id INTEGER PRIMARY KEY, date TEXT, time TEXT, stadium_id INTEGER, 
                   home_team_id INTEGER, away_team_id INTEGER,
-                  home_probable_pitcher_id TEXT, away_probable_pitcher_id TEXT)''')
+                  home_probable_pitcher_id TEXT, away_probable_pitcher_id TEXT, wind_effect_label TEXT)''')
     c.execute('DROP TABLE IF EXISTS WeatherForecasts')
     c.execute('''CREATE TABLE IF NOT EXISTS WeatherForecasts 
                  (id INTEGER PRIMARY KEY AUTOINCREMENT, game_id INTEGER, 
@@ -183,10 +183,10 @@ def fetch_weather_and_store(conn, start_date, end_date):
 
     for game in games:
         game_id, date, time, stadium_id = game
-        stadium = c.execute("SELECT lat, lon, is_dome FROM Stadiums WHERE id = ?", (stadium_id,)).fetchone()
+        stadium = c.execute("SELECT lat, lon, is_dome, orientation FROM Stadiums WHERE id = ?", (stadium_id,)).fetchone()
         if not stadium or stadium[2]:
             continue
-        lat, lon = stadium[0], stadium[1]
+        lat, lon, is_dome, orientation = stadium
         if lat is None or lon is None:
             print(f"Skipping game https://baseballsavant.mlb.com/preview?game_pk={game_id} due to missing stadium {stadium_id} coordinates.")
             continue
@@ -201,9 +201,13 @@ def fetch_weather_and_store(conn, start_date, end_date):
             utc_time = local_time.astimezone(pytz.utc)
 
         weather = get_weather_nws(lat, lon, utc_time)
+        wind_effect_label = get_wind_effect_label(orientation, weather['wind_dir'])
         if weather is not None:
             c.execute("INSERT INTO WeatherForecasts (game_id, wind_dir, wind_speed, temp, rain) VALUES (?, ?, ?, ?, ?)",
                       (game_id, weather['wind_dir'], weather['wind_speed'], weather['temp'], weather['rain']))
+            c.execute("""
+                    UPDATE Games SET wind_effect_label = ? WHERE id = ?
+                """, (wind_effect_label, game_id))
         else:
             print(f"Skipping game {game_id} due to API error.")
 
@@ -217,6 +221,21 @@ def get_wind_effect(orientation, wind_dir, wind_speed):
     elif abs(angle_diff) > 135 and wind_speed > 10:
         return 0.9
     return 1.0
+
+def get_wind_effect_label(orientation, wind_dir):
+    """
+    Determines the wind effect label ("Out", "In", "Neutral") based on the stadium's orientation and wind direction.
+    """
+    if orientation is None or wind_dir is None:
+        return "Neutral"
+
+    angle_diff = (wind_dir - orientation + 180) % 360 - 180
+    if abs(angle_diff) < 45:
+        return "Out"
+    elif abs(angle_diff) > 135:
+        return "In"
+    else:
+        return "Neutral"
 
 def get_temp_adjustment(temp):
     if temp > 80:
@@ -235,15 +254,14 @@ def wind_dir_to_degrees(wind_dir):
 
 def calculate_sorare_hitter_score(stats, scoring_matrix):
     score = 0
-    singles = stats.get('H', 0) - (stats.get('2B', 0) + stats.get('3B', 0) + stats.get('HR', 0))
-    score += singles * scoring_matrix['hitting'].get('1B', 0)
+    score += stats.get('1B', 0) * scoring_matrix['hitting'].get('1B', 0)
     score += stats.get('2B', 0) * scoring_matrix['hitting'].get('2B', 0)
     score += stats.get('3B', 0) * scoring_matrix['hitting'].get('3B', 0)
     score += stats.get('HR', 0) * scoring_matrix['hitting'].get('HR', 0)
     score += stats.get('R', 0) * scoring_matrix['hitting'].get('R', 0)
     score += stats.get('RBI', 0) * scoring_matrix['hitting'].get('RBI', 0)
     score += stats.get('BB', 0) * scoring_matrix['hitting'].get('BB', 0)
-    score += stats.get('SO', 0) * scoring_matrix['hitting'].get('K', 0)
+    score += stats.get('K', 0) * scoring_matrix['hitting'].get('K', 0)
     score += stats.get('SB', 0) * scoring_matrix['hitting'].get('SB', 0)
     score += stats.get('CS', 0) * scoring_matrix['hitting'].get('CS', 0)
     score += stats.get('HBP', 0) * scoring_matrix['hitting'].get('HBP', 0)
@@ -259,7 +277,8 @@ def calculate_sorare_pitcher_score(stats, scoring_matrix):
     score += stats.get('HBP', 0) * scoring_matrix['pitching'].get('HBP', 0)
     score += stats.get('W', 0) * scoring_matrix['pitching'].get('W', 0)
     score += stats.get('HLD', 0) * scoring_matrix['pitching'].get('HLD', 0)
-    score += stats.get('SV', 0) * scoring_matrix['pitching'].get('S', 0)
+    score += stats.get('S', 0) * scoring_matrix['pitching'].get('S', 0)
+    score += stats.get('RA', 0) * scoring_matrix['pitching'].get('RA', 0)
     return score
 
 def adjust_score_for_injury(base_score, injury_status, return_estimate, game_date):
@@ -460,12 +479,18 @@ def process_pitcher(conn, game_data, pitcher_data, injuries, game_week_id, is_st
         'BB': pitcher_data.get('BB_per_game', 0),
         'HBP': pitcher_data.get('HBP_per_game', 0),
         'W': pitcher_data.get('W_per_game', 0),
-        'SV': pitcher_data.get('S_per_game', 0)
+        'HLD': pitcher_data.get('HLD_per_game', 0),
+        'S': pitcher_data.get('S_per_game', 0),
+        'RA': not is_starter
     }
     
     adjusted_stats = adjust_stats(base_stats, park_factors, is_dome, orientation, wind_dir, wind_speed, temp, is_pitcher=True)
     base_score = calculate_sorare_pitcher_score(adjusted_stats, SCORING_MATRIX)
-    
+
+    if not is_starter:
+        # If not a starter, apply a reduction to the score
+        base_score *= 0.4
+
     # Try to find injury data with the unique key first, then fall back to just the name
     injury_data = injuries.get(unique_player_key, injuries.get(player_name, {'status': 'Active', 'return_estimate': None}))
     final_score = adjust_score_for_injury(base_score, injury_data['status'], injury_data['return_estimate'], game_date_obj)
