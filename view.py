@@ -48,7 +48,9 @@ def get_all_projections():
     #cursor = conn.execute("SELECT * FROM AdjustedProjections WHERE player_name IN ('NICK PIVETTA','TANNER BIBEE')")
 
     #cursor = conn.execute("PRAGMA table_info(pitchers_per_game)")
-    cursor = conn.execute("SELECT IP_per_game, H_per_game, ER_per_game, BB_per_game, HBP_per_game, W_per_game, K_per_game FROM pitchers_per_game WHERE name IN ('NICK PIVETTA','TANNER BIBEE')")
+    #cursor = conn.execute('SELECT `1B_per_game`, "2B_per_game", "3B_per_game" FROM hitters_per_game WHERE name IN ("KYLE TUCKER")')
+
+    cursor = conn.execute("SELECT HLD_per_game, IP_per_game, H_per_game, ER_per_game, BB_per_game, HBP_per_game, W_per_game, K_per_game FROM pitchers_per_game WHERE name IN ('PAUL SEWALD','TANNER BIBEE')")
 
     for row in cursor:
         print(row) #This will print tuples of the rows in the db.

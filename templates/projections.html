@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MLB Game Week Projections</title>
+    <link href="/static/css/dark-mode.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.0/css/bootstrap.min.css" rel="stylesheet">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.6.0/jquery.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.3.0/js/bootstrap.bundle.min.js"></script>
+    
+    <style>
+        body {
+            padding-top: 20px;
+            background-color: #f8f9fa;
+        }
+        .game-card {
+            margin-bottom: 25px;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+        .game-header {
+            background: linear-gradient(135deg, #0d6efd, #0a58ca);
+            color: white;
+            padding: 15px;
+        }
+        .team-section {
+            background-color: #fff;
+            padding: 15px;
+            border-bottom: 1px solid #eee;
+        }
+        .team-name {
+            font-size: 1.4rem;
+            font-weight: bold;
+            margin-bottom: 15px;
+        }
+        .player-row:hover {
+            background-color: rgba(13, 110, 253, 0.05);
+        }
+        .table-header {
+            background-color: #f1f1f1;
+            font-weight: bold;
+        }
+        .weather-info {
+            
+            padding: 10px 15px;
+            font-size: 0.9rem;
+        }
+        .pitcher {
+            background-color: rgba(255, 193, 7, 0.1);
+        }
+        .score-pill {
+            font-size: 1rem;
+            font-weight: bold;
+            padding: 5px 10px;
+            border-radius: 15px;
+        }
+        .high-score {
+            background-color: #198754;
+            color: white;
+        }
+        .med-score {
+            background-color: #ffc107;
+            color: black;
+        }
+        .low-score {
+            background-color: #dc3545;
+            color: white;
+        }
+        .week-selector {
+            margin-bottom: 25px;
+        }
+        .stats-toggle {
+            cursor: pointer;
+            color: #0d6efd;
+            text-decoration: underline;
+            margin-left: 10px;
+        }
+        .raw-stats {
+            display: none;
+            font-size: 0.85rem;
+            background-color: #f8f9fa;
+            padding: 8px;
+            border-radius: 4px;
+            margin-top: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="d-flex justify-content-end align-items-center mb-3">
+            <label class="form-check-label me-2" for="darkModeToggle">Dark Mode</label>
+            <input class="form-check-input" type="checkbox" id="darkModeToggle">
+        </div>
+        <h1 class="text-center mb-4">MLB Game Week Projections</h1>
+        
+        <!-- Game Week Selector -->
+        <div class="week-selector text-center">
+            <form class="d-inline-block">
+                <div class="input-group">
+                    <select class="form-select" id="gameWeekSelect" onchange="location = '/projections/' + this.value;">
+                        {% for week in game_weeks %}
+                            <option value="{{ week.game_week }}" {% if week.game_week == current_game_week %}selected{% endif %}>
+                                {{ week.game_week.replace('_to_', ' to ') }}
+                            </option>
+                        {% endfor %}
+                    </select>
+                    <button class="btn btn-primary" type="submit">Go</button>
+                </div>
+            </form>
+        </div>
+        
+        <!-- Games Section -->
+        {% if games %}
+            {% for game in games %}
+                {% set game_proj = game_projections[game.id] %}
+                <div class="game-card">
+                    <!-- Game Header -->
+                    <div class="game-header">
+                        <div class="row">
+                            <div class="col-md-8">
+                                <h2>{{ game.away_team_name }} @ {{ game.home_team_name }}</h2>
+                                <p class="mb-0">{{ game.date }} at {{ game.time }}</p>
+                                <p class="mb-0">{{ game.stadium_name }}</p>
+                            </div>
+                            <div class="col-md-4 text-md-end">
+                                {% if game_proj.weather %}
+                                <div class="weather-info mt-2">
+                                    <div><strong>Weather:</strong> {{ game_proj.weather.temp }}°F</div>
+                                    <div>Wind: {{ game_proj.weather.wind_speed }} mph ({{ game.wind_effect_label }})</div>
+                                    <div>Rain: {{ game_proj.weather.rain }}%</div>
+                                </div>
+                                {% endif %}
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Home Team Section -->
+                    <div class="team-section">
+                        <div class="team-name">{{ game.home_team_name }} <span class="text-muted">(Home)</span></div>
+                        
+                        <table class="table table-hover">
+                            <thead class="table-header">
+                                <tr>
+                                    <th>Player</th>
+                                    <th class="text-center">Position</th>
+                                    <th class="text-end">Sorare Score</th>
+                                    <th></th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for player in game_proj.home_players %}
+                                <tr class="player-row {% if player.position == 'P' %}pitcher{% endif %}">
+                                    <td>
+                                        {{ player.player_name }}
+                                        <span class="stats-toggle" onclick="toggleStats('home-{{ game.id }}-{{ loop.index }}')">Stats</span>
+                                        <div id="home-{{ game.id }}-{{ loop.index }}" class="raw-stats">
+                                            {% if player.position == 'H' %}
+                                                <div>R: {{ "%.2f"|format(player.R_per_game|float) }} | RBI: {{ "%.2f"|format(player.RBI_per_game|float) }} | K: {{ "%.2f"|format(player.h_K_per_game|float) }}</div>
+                                                <div>1B: {{ "%.2f"|format(player.h_1B_per_game|float) }} | 2B: {{ "%.2f"|format(player.h_2B_per_game|float) }} | 3B: {{ "%.2f"|format(player.h_3B_per_game|float) }} | HR: {{ "%.2f"|format(player.HR_per_game|float) }}</div>
+                                                <div>BB: {{ "%.2f"|format(player.h_BB_per_game|float) }} | HBP: {{ "%.2f"|format(player.h_HBP_per_game|float) }} | SB: {{ "%.2f"|format(player.SB_per_game|float) }} | CS: {{ "%.2f"|format(player.CS_per_game|float) }}</div>
+                                            {% else %}
+                                                <div>IP: {{ "%.1f"|format(player.IP_per_game|float) }} | K: {{ "%.1f"|format(player.K_per_game|float) }}</div>
+                                                <div>H: {{ "%.1f"|format(player.H_per_game|float) }} | ER: {{ "%.1f"|format(player.ER_per_game|float) }} | BB: {{ "%.1f"|format(player.BB_per_game|float)}} | HBP: {{ "%.1f"|format(player.HBP_per_game|float) }}</div>
+                                                <div>W: {{ "%.2f"|format(player.W_per_game|float) }} | SV: {{ "%.2f"|format(player.S_per_game|float) }} | HLD: {{ "%.2f"|format(player.HLD_per_game|float) }}</div>
+                                            {% endif %}
+                                        </div>
+                                    </td>
+                                    <td class="text-center">{{ player.position }}</td>
+                                    <td class="text-end">
+                                        {% set score = player.sorare_score|float %}
+                                        <span class="score-pill 
+                                            {% if score > 20 %}high-score
+                                            {% elif score > 10 %}med-score
+                                            {% else %}low-score{% endif %}">
+                                            {{ "%.1f"|format(score) }}
+                                        </span>
+                                    </td>
+                                    <td class="text-center">
+                                        <div class="progress" style="height: 10px; width: 60px;">
+                                            <div class="progress-bar" role="progressbar" 
+                                                
+                                                aria-valuenow="{{ player.sorare_score|float }}" 
+                                                aria-valuemin="0" aria-valuemax="50"></div>
+                                        </div>
+                                    </td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                    
+                    <!-- Away Team Section -->
+                    <div class="team-section">
+                        <div class="team-name">{{ game.away_team_name }} <span class="text-muted">(Away)</span></div>
+                        
+                        <table class="table table-hover">
+                            <thead class="table-header">
+                                <tr>
+                                    <th>Player</th>
+                                    <th class="text-center">Position</th>
+                                    <th class="text-end">Sorare Score</th>
+                                    <th></th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for player in game_proj.away_players %}
+                                <tr class="player-row {% if player.position == 'P' %}pitcher{% endif %}">
+                                    <td>
+                                        {{ player.player_name }}
+                                        <span class="stats-toggle" onclick="toggleStats('away-{{ game.id }}-{{ loop.index }}')">Stats</span>
+                                        <div id="away-{{ game.id }}-{{ loop.index }}" class="raw-stats">
+                                            {% if player.position == 'H' %}
+                                                <div>R: {{ "%.2f"|format(player.R_per_game|float) }} | RBI: {{ "%.2f"|format(player.RBI_per_game|float) }} | K: {{ "%.2f"|format(player.h_K_per_game|float) }}</div>
+                                                <div>1B: {{ "%.2f"|format(player.h_1B_per_game|float) }} | 2B: {{ "%.2f"|format(player.h_2B_per_game|float) }} | 3B: {{ "%.2f"|format(player.h_3B_per_game|float) }} | HR: {{ "%.2f"|format(player.HR_per_game|float) }}</div>
+                                                <div>BB: {{ "%.2f"|format(player.h_BB_per_game|float) }} | HBP: {{ "%.2f"|format(player.h_HBP_per_game|float) }} | SB: {{ "%.2f"|format(player.SB_per_game|float) }} | CS: {{ "%.2f"|format(player.CS_per_game|float) }}</div>
+                                            {% else %}
+                                                <div>IP: {{ "%.1f"|format(player.IP_per_game|float) }} | K: {{ "%.1f"|format(player.K_per_game|float) }}</div>
+                                                <div>H: {{ "%.1f"|format(player.H_per_game|float) }} | ER: {{ "%.1f"|format(player.ER_per_game|float) }} | BB: {{ "%.1f"|format(player.BB_per_game|float)}} | HBP: {{ "%.1f"|format(player.HBP_per_game|float) }}</div>
+                                                <div>W: {{ "%.2f"|format(player.W_per_game|float) }} | SV: {{ "%.2f"|format(player.S_per_game|float) }} | HLD: {{ "%.2f"|format(player.HLD_per_game|float) }}</div>
+                                            {% endif %}
+                                        </div>
+                                    </td>
+                                    <td class="text-center">{{ player.position }}</td>
+                                    <td class="text-end">
+                                        {% set score = player.sorare_score|float %}
+                                        <span class="score-pill 
+                                            {% if score > 20 %}high-score
+                                            {% elif score > 10 %}med-score
+                                            {% else %}low-score{% endif %}">
+                                            {{ "%.1f"|format(score) }}
+                                        </span>
+                                    </td>
+                                    <td class="text-center">
+                                        <div class="progress" style="height: 10px; width: 60px;">
+                                          <div class="progress-bar" role="progressbar" 
+                                         
+                                            aria-valuenow="{{ player.sorare_score|float }}" 
+                                               aria-valuemin="0" aria-valuemax="50"></div>
+                                        </div>
+                                    </td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            {% endfor %}
+        {% else %}
+            <div class="alert alert-info">No games found for this period.</div>
+        {% endif %}
+    </div>
+    <script src="/static/js/dark-mode.js"></script>
+    <script>
+        function toggleStats(elementId) {
+            const element = document.getElementById(elementId);
+            if (element.style.display === "none" || element.style.display === "") {
+                element.style.display = "block";
+            } else {
+                element.style.display = "none";
+            }
+        }
+    </script>
+</body>
+</html>

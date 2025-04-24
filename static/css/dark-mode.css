@@ -56,3 +56,129 @@ body.dark-mode .lineup-content h4 {
 body.dark-mode .lineup-content a {
     color: #66bfff;
 }
+
+/* Dark mode styling for the Game Week Selector */
+body.dark-mode .week-selector {
+    background-color: #1e1e1e;
+    border: 1px solid #333;
+    border-radius: 8px;
+    padding: 10px;
+    color: #e0e0e0;
+}
+
+body.dark-mode .week-selector .form-select {
+    background-color: #2a2a2a;
+    color: #e0e0e0;
+    border: 1px solid #444;
+}
+
+body.dark-mode .week-selector .form-select:focus {
+    background-color: #333;
+    color: #fff;
+    border-color: #555;
+    box-shadow: none;
+}
+
+body.dark-mode .week-selector .btn-primary {
+    background-color: #0d6efd;
+    border-color: #0a58ca;
+}
+
+body.dark-mode .week-selector .btn-primary:hover {
+    background-color: #0a58ca;
+    border-color: #084298;
+}
+
+/* Dark mode styling for the Game Section */
+body.dark-mode .game-card {
+    background-color: #1e1e1e;
+    border: 1px solid #333;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.5);
+}
+
+body.dark-mode .game-header {
+    background: linear-gradient(135deg, #0a58ca, #084298);
+    color: #e0e0e0;
+}
+
+body.dark-mode .team-section {
+    background-color: #2a2a2a;
+    border-bottom: 1px solid #444;
+    color: #e0e0e0;
+}
+
+body.dark-mode .team-name {
+    color: #f0f0f0;
+}
+
+body.dark-mode .table-header {
+    background-color: #333;
+    color: #e0e0e0;
+}
+
+body.dark-mode .player-row:hover {
+    background-color: rgba(13, 110, 253, 0.1);
+}
+
+body.dark-mode .stats-toggle {
+    color: #66bfff;
+}
+
+body.dark-mode .raw-stats {
+    background-color: #1e1e1e;
+    border: 1px solid #444;
+    color: #e0e0e0;
+}
+
+/* Dark mode styling for the player table */
+body.dark-mode .table {
+    background-color: #1e1e1e;
+    color: #e0e0e0;
+    border-color: #444;
+}
+
+body.dark-mode .table th,
+body.dark-mode .table td {
+    border: 1px solid #444;
+}
+
+body.dark-mode .table-hover tbody tr:hover {
+    background-color: rgba(255, 255, 255, 0.1);
+}
+
+body.dark-mode .table-header {
+    background-color: #333;
+    color: #e0e0e0;
+}
+
+body.dark-mode .player-row {
+    background-color: #2a2a2a;
+}
+
+body.dark-mode .player-row:hover {
+    background-color: rgba(13, 110, 253, 0.1);
+}
+
+body.dark-mode .score-pill {
+    background-color: #444;
+    color: #e0e0e0;
+}
+
+body.dark-mode .high-score {
+    background-color: #198754;
+    color: white;
+}
+
+body.dark-mode .med-score {
+    background-color: #ffc107;
+    color: black;
+}
+
+body.dark-mode .low-score {
+    background-color: #dc3545;
+    color: white;
+}
+
+body.dark-mode .progress-bar {
+    background-color: #0d6efd;
+}
