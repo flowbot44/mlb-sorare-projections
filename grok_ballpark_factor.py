@@ -127,6 +127,7 @@ def get_weather_nws(lat, lon, forecast_time):
         if not (-90 <= lat <= 90 and -180 <= lon <= 180):
             print(f"Invalid coordinates: lat={lat}, lon={lon}")
             return None
+        
 
         points_url = f"https://api.weather.gov/points/{lat},{lon}"
         points_response = requests.get(points_url)
@@ -199,6 +200,10 @@ def fetch_weather_and_store(conn, start_date, end_date):
             local_time = datetime.strptime(f"{date}T{time}", "%Y-%m-%dT%H:%M:%S")
             local_time = local_tz.localize(local_time)
             utc_time = local_time.astimezone(pytz.utc)
+
+        if utc_time > datetime.now(pytz.utc) + timedelta(days=7):
+            print(f"⚠️ Skipping forecast too far in the future: {utc_time} game id {game_id}")
+            continue
 
         weather = get_weather_nws(lat, lon, utc_time)
         wind_effect_label = get_wind_effect_label(orientation, weather['wind_dir'])
