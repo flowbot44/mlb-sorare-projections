@@ -1,145 +1,141 @@
-<!-- templates/index.html - Main page template -->
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Sorare MLB Lineup Optimizer</title>
-    <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/plugins/MultiDrag/MultiDrag.min.js"></script>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link href="/static/css/main.css" rel="stylesheet">
-    <link href="/static/css/dark-mode.css" rel="stylesheet">
-</head>
-<body>
-    <div class="optimizer-container">
-        <div class="d-flex justify-content-end align-items-center mb-3">
-            <label class="form-check-label me-2" for="darkModeToggle">Dark Mode</label>
-            <input class="form-check-input" type="checkbox" id="darkModeToggle">
-        </div>
-        <h1 class="text-center mb-4">Sorare MLB Lineup Optimizer</h1>
-       
-        <div class="db-status alert alert-secondary">
-            <strong>Status:</strong> Checking database connection...
-        </div>
-        
-        <!-- New database initialization container -->
-        <div class="db-init-container" id="dbInitContainer">
-            <h4>Database Initialization Required</h4>
-            <p>The database does not exist or is missing required tables. You need to initialize the database before you can generate lineups.</p>
-            <p><strong>This will:</strong></p>
-            <ul>
-                <li>Download data from Fangraphs</li>
-                <li>Download park factor data</li>
-                <li>Process statistical projections</li>
-                <li>Update stadium information</li>
-            </ul>
-            <p><strong>Note:</strong> This process may take several minutes.</p>
-            <div class="d-grid gap-2">
-                <button type="button" id="fullUpdateBtn" class="btn btn-warning">Initialize Database</button>
-            </div>
-        </div>
-        
-        <div class="form-container">
-            <form id="lineupForm">
-                <div class="row mb-3">
-                    <div class="col-md-6">
-                        <label for="username" class="form-label">Sorare Username</label>
-                        <input type="text" class="form-control" id="username" name="username" required>
-                    </div>
-                    <div class="col-md-6">
-                        <label for="ignore_players" class="form-label">Ignore Players (comma-separated)</label>
-                        <input type="text" class="form-control" id="ignore_players" name="ignore_players">
-                    </div>
-                </div>
-                
-                <div class="row mb-3">
-                    <div class="col-md-3">
-                        <label for="rare_energy" class="form-label">Rare Energy</label>
-                        <input type="number" class="form-control" id="rare_energy" name="rare_energy" value="{{ default_rare_energy }}">
-                    </div>
-                    <div class="col-md-3">
-                        <label for="limited_energy" class="form-label">Limited Energy</label>
-                        <input type="number" class="form-control" id="limited_energy" name="limited_energy" value="{{ default_limited_energy }}">
-                    </div>
-                    <div class="col-md-3">
-                        <label for="boost_2025" class="form-label">2025 Card Boost</label>
-                        <input type="number" step="0.1" class="form-control" id="boost_2025" name="boost_2025" value="{{ default_boost_2025 }}">
-                    </div>
-                    <div class="col-md-3">
-                        <label for="stack_boost" class="form-label">Stack Boost</label>
-                        <input type="number" step="0.1" class="form-control" id="stack_boost" name="stack_boost" value="{{ default_stack_boost }}">
-                    </div>
-                </div>
-              
-                <div class="mb-3">
-                    <div class="row">
-                        <div class="col-md-6">
-                            <label class="form-label">Lineup Order</label>
-                            <ul id="activeLineup" class="list-group min-vh-50" style="min-height: 200px;">
-                              <li class="list-group-item">Common Minors</li>
-                            </ul>
-                          </div>
-                          <div class="col-md-6">
-                            <label class="form-label">Inactive</label>
-                            <ul id="inactiveLineup" class="list-group bg-light" style="min-height: 200px;">
-                              <li class="list-group-item">Rare Champion_1</li>
-                              <li class="list-group-item">Rare Champion_2</li>
-                              <li class="list-group-item">Rare Champion_3</li>
-                              <li class="list-group-item">Rare All-Star_1</li>
-                              <li class="list-group-item">Rare All-Star_2</li>
-                              <li class="list-group-item">Rare All-Star_3</li>
-                              <li class="list-group-item">Rare Challenger_1</li>
-                              <li class="list-group-item">Rare Challenger_2</li>
-                              <li class="list-group-item">Limited All-Star_1</li>
-                              <li class="list-group-item">Limited All-Star_2</li>
-                              <li class="list-group-item">Limited All-Star_3</li>
-                              <li class="list-group-item">Limited Champion_1</li>
-                              <li class="list-group-item">Limited Champion_2</li>
-                              <li class="list-group-item">Limited Champion_3</li>
-                              <li class="list-group-item">Limited Challenger_1</li>
-                              <li class="list-group-item">Limited Challenger_2</li>
-                            </ul>
-                          </div>
-                      </div>
-                      
-                      <!-- Hidden input that gets updated -->
-                      <input type="hidden" id="lineup_order" name="lineup_order" value="">
-                      
-                </div>
-                
-                <div class="d-grid gap-2">
-                    <button type="submit" class="btn btn-primary" id="generateBtn">Generate Lineups</button>
-                    <div class="row mt-2">
-                        <div class="col-md-6">
-                            <button type="button" id="updateDataBtn" class="btn btn-secondary w-100">Update Injuries & Projections</button>
-                        </div>
-                        <div class="col-md-6">
-                            <button type="button" id="fullRefreshBtn" class="btn btn-outline-danger w-100">Full Database Refresh</button>
-                        </div>
-                    </div>
-                </div>
-            </form>
-        </div>
-        
-        <div class="loading">
-            <div class="spinner-border text-primary" role="status">
-                <span class="visually-hidden">Loading...</span>
-            </div>
-            <p class="mt-2" id="loadingMessage">Processing your request... This may take a minute.</p>
-        </div>
-        
-        <div class="results-container">
-            <h3>Lineups for <span id="results-username"></span></h3>
-            <p>Game Week: {{ game_week }}</p>
-                       
-            <div class="lineup-content" id="lineupResults"></div>
+<!-- templates/index.html -->
+{% extends "base.html" %}
+
+{% block title %}Sorare MLB Lineup Optimizer{% endblock %}
+
+{% block extra_css %}
+<link href="/static/css/main.css" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/plugins/MultiDrag/MultiDrag.min.js"></script>
+{% endblock %}
+
+{% block content %}
+<div class="optimizer-container">
+    <h1 class="text-center mb-4">Sorare MLB Lineup Optimizer</h1>
+   
+    <div class="db-status alert alert-secondary">
+        <strong>Status:</strong> Checking database connection...
+    </div>
+    
+    <!-- New database initialization container -->
+    <div class="db-init-container" id="dbInitContainer">
+        <h4>Database Initialization Required</h4>
+        <p>The database does not exist or is missing required tables. You need to initialize the database before you can generate lineups.</p>
+        <p><strong>This will:</strong></p>
+        <ul>
+            <li>Download data from Fangraphs</li>
+            <li>Download park factor data</li>
+            <li>Process statistical projections</li>
+            <li>Update stadium information</li>
+        </ul>
+        <p><strong>Note:</strong> This process may take several minutes.</p>
+        <div class="d-grid gap-2">
+            <button type="button" id="fullUpdateBtn" class="btn btn-warning">Initialize Database</button>
         </div>
     </div>
     
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/js/bootstrap.bundle.min.js"></script>
-    <script src="/static/js/dark-mode.js"></script>
-    <script src="/static/js/main.js"></script>
+    <div class="form-container">
+        <form id="lineupForm">
+            <div class="row mb-3">
+                <div class="col-md-6">
+                    <label for="username" class="form-label">Sorare Username</label>
+                    <input type="text" class="form-control" id="username" name="username" required>
+                </div>
+                <div class="col-md-6">
+                    <label for="ignore_players" class="form-label">Ignore Players (comma-separated)</label>
+                    <input type="text" class="form-control" id="ignore_players" name="ignore_players">
+                </div>
+            </div>
+            
+            <div class="row mb-3">
+                <div class="col-md-3">
+                    <label for="rare_energy" class="form-label">Rare Energy</label>
+                    <input type="number" class="form-control" id="rare_energy" name="rare_energy" value="{{ default_rare_energy }}">
+                </div>
+                <div class="col-md-3">
+                    <label for="limited_energy" class="form-label">Limited Energy</label>
+                    <input type="number" class="form-control" id="limited_energy" name="limited_energy" value="{{ default_limited_energy }}">
+                </div>
+                <div class="col-md-3">
+                    <label for="boost_2025" class="form-label">2025 Card Boost</label>
+                    <input type="number" step="0.1" class="form-control" id="boost_2025" name="boost_2025" value="{{ default_boost_2025 }}">
+                </div>
+                <div class="col-md-3">
+                    <label for="stack_boost" class="form-label">Stack Boost</label>
+                    <input type="number" step="0.1" class="form-control" id="stack_boost" name="stack_boost" value="{{ default_stack_boost }}">
+                </div>
+            </div>
+          
+            <div class="mb-3">
+                <div class="row">
+                    <div class="col-md-6">
+                        <label class="form-label">Lineup Order</label>
+                        <ul id="activeLineup" class="list-group min-vh-50" style="min-height: 200px;">
+                          <li class="list-group-item">Common Minors</li>
+                        </ul>
+                      </div>
+                      <div class="col-md-6">
+                        <label class="form-label">Inactive</label>
+                        <ul id="inactiveLineup" class="list-group bg-light" style="min-height: 200px;">
+                          <li class="list-group-item">Rare Champion_1</li>
+                          <li class="list-group-item">Rare Champion_2</li>
+                          <li class="list-group-item">Rare Champion_3</li>
+                          <li class="list-group-item">Rare All-Star_1</li>
+                          <li class="list-group-item">Rare All-Star_2</li>
+                          <li class="list-group-item">Rare All-Star_3</li>
+                          <li class="list-group-item">Rare Challenger_1</li>
+                          <li class="list-group-item">Rare Challenger_2</li>
+                          <li class="list-group-item">Limited All-Star_1</li>
+                          <li class="list-group-item">Limited All-Star_2</li>
+                          <li class="list-group-item">Limited All-Star_3</li>
+                          <li class="list-group-item">Limited Champion_1</li>
+                          <li class="list-group-item">Limited Champion_2</li>
+                          <li class="list-group-item">Limited Champion_3</li>
+                          <li class="list-group-item">Limited Challenger_1</li>
+                          <li class="list-group-item">Limited Challenger_2</li>
+                        </ul>
+                      </div>
+                  </div>
+                  
+                  <!-- Hidden input that gets updated -->
+                  <input type="hidden" id="lineup_order" name="lineup_order" value="">
+            </div>
+            
+            <div class="d-grid gap-2">
+                <button type="submit" class="btn btn-primary" id="generateBtn">Generate Lineups</button>
+                <div class="row mt-2">
+                    <div class="col-md-6">
+                        <button type="button" id="updateDataBtn" class="btn btn-secondary w-100">Update Injuries & Projections</button>
+                    </div>
+                    <div class="col-md-6">
+                        <button type="button" id="fullRefreshBtn" class="btn btn-outline-danger w-100">Full Database Refresh</button>
+                    </div>
+                </div>
+            </div>
+        </form>
+    </div>
+    
+    <div class="loading">
+        <div class="spinner-border text-primary" role="status">
+            <span class="visually-hidden">Loading...</span>
+        </div>
+        <p class="mt-2" id="loadingMessage">Processing your request... This may take a minute.</p>
+    </div>
+    <div class="weather-report-container mt-4">
+        <h3>Weather Report</h3>
+        <div id="weatherReport">
+            <p>Loading weather report...</p>
+        </div>
+    </div>
+    <div class="results-container">
+        <h3>Lineups for <span id="results-username"></span></h3>
+        <p>Game Week: {{ game_week }}</p>
+                   
+        <div class="lineup-content" id="lineupResults"></div>
+    </div>
+</div>
+{% endblock %}
 
-</body>
-</html>
+{% block extra_js %}
+<script src="/static/js/main.js"></script>
+{% endblock %}

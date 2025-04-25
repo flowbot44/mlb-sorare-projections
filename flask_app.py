@@ -139,6 +139,7 @@ def index():
     db_exists = check_and_create_db()
     
     return render_template('index.html', 
+                          active_page='home', 
                           game_week=Config.GAME_WEEK,
                           default_rare_energy=DEFAULT_ENERGY_LIMITS["rare"],
                           default_limited_energy=DEFAULT_ENERGY_LIMITS["limited"],
@@ -208,10 +209,7 @@ def generate_lineup():
             energy_per_card=energy_per_card,
             ignore_list=ignore_list
         )
-        
-        # Generate weather report HTML (can be cached separately if needed)
-        weather_html = generate_weather_html()
-        
+              
         # Generate lineups HTML
         lineup_html = generate_lineups_html(
             lineups=lineups,
@@ -221,8 +219,7 @@ def generate_lineup():
             stack_boost=stack_boost,
             energy_per_card=energy_per_card,
             cards_df=cards_df,
-            projections_df=projections_df,
-            weather_html=weather_html
+            projections_df=projections_df
         )
         
         # Return success with HTML content
@@ -461,7 +458,7 @@ def show_projections(game_week_id=None):
         WHERE g.date BETWEEN ? AND ?
         ORDER BY g.date, g.time
     """, (start_date, end_date)).fetchall()
-    
+
     # Get all projections for each game
     game_projections = {}
     for game in games:
@@ -515,6 +512,35 @@ def show_projections(game_week_id=None):
             'weather': weather
         }
     
+    # Query for games missing probable pitchers
+    missing_pitchers = c.execute("""
+        SELECT g.id, g.date, g.time, 
+               ht.name AS home_team_name, at.name AS away_team_name,
+               g.home_probable_pitcher_id IS NULL AS home_probable_missing,
+               g.away_probable_pitcher_id IS NULL AS away_probable_missing
+        FROM Games g
+        JOIN Teams ht ON g.home_team_id = ht.id
+        JOIN Teams at ON g.away_team_id = at.id
+        WHERE (g.home_probable_pitcher_id IS NULL OR g.away_probable_pitcher_id IS NULL)
+          AND g.date BETWEEN ? AND ?
+        ORDER BY g.date, g.time
+    """, (start_date, end_date)).fetchall()
+    
+    # Generate Baseball Savant links for missing probable pitchers
+    missing_pitchers_links = [
+        {
+            'game_id': game['id'],
+            'date': game['date'],
+            'time': game['time'],
+            'home_team': game['home_team_name'],
+            'away_team': game['away_team_name'],
+            'home_probable_missing': bool(game['home_probable_missing']),
+            'away_probable_missing': bool(game['away_probable_missing']),
+            'savant_link': f"https://baseballsavant.mlb.com/preview?game_pk={game['id']}"
+        }
+        for game in missing_pitchers
+    ]
+      
     # Get available game weeks for navigation
     game_weeks = c.execute("""
         SELECT DISTINCT game_week 
@@ -524,11 +550,13 @@ def show_projections(game_week_id=None):
     
     conn.close()
     
-    return render_template('projections.html', 
+    return render_template('projections.html',
+                          active_page='projections', 
                           games=games,
-                          game_projections=game_projections, 
+                          missing_pitchers_links=missing_pitchers_links,
                           current_game_week=game_week_id,
-                          game_weeks=game_weeks)
+                          game_weeks=game_weeks,
+                          game_projections=game_projections)
 
 
 @app.template_filter('score_to_width')
