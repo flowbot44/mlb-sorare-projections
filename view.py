@@ -73,22 +73,13 @@ def get_best_players():
     conn = sqlite3.connect(db_path)  # Create/connect to the database file
 
     query = """
-    SELECT
-        ap.player_name,
-        ap.team_id,
-        g.id as game_id,
-        ap.sorare_score
-    FROM
-        AdjustedProjections ap
-    JOIN
-        Games g ON ap.game_id = g.id
-    JOIN
-        hitters_per_game hpg ON ap.player_name = hpg.Name -- Join to ensure only hitters are included
-    WHERE
-        g.date = '2025-04-12' -- Filter for today's date
-    ORDER BY
-        ap.sorare_score DESC -- Order by highest projected score
-    LIMIT 10; -- Limit the results to 10
+        SELECT g.home_probable_pitcher_id, g.away_probable_pitcher_id, g.id, g.date, g.time, ht.name AS home_team_name, at.name AS away_team_name
+        FROM Games g
+        JOIN Teams ht ON g.home_team_id = ht.id
+        JOIN Teams at ON g.away_team_id = at.id
+        WHERE (g.home_probable_pitcher_id IS NULL OR g.away_probable_pitcher_id IS NULL)
+          
+        ORDER BY g.date, g.time
     """
     cursor = conn.execute(query)
 
@@ -100,9 +91,9 @@ def get_best_players():
 def main():
     #get_all_players()
     #get_cards_with_injuries()
-    get_all_projections()
+    #get_all_projections()
     #get_all_teams()
-    #get_best_players()
+    get_best_players()
     #get_all_games()
 
 if __name__ == "__main__":

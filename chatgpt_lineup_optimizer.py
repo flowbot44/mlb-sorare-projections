@@ -733,7 +733,7 @@ def save_lineups(lineups: Dict[str, Dict], output_file: str, energy_limits: Dict
         f.write(sealed_report)
 
 def generate_lineups_html(lineups, energy_limits, username, boost_2025, stack_boost, energy_per_card, 
-                          cards_df, projections_df, weather_html=None):
+                          cards_df, projections_df):
     """Generate HTML content for lineups instead of saving to a file."""
     
     html_content = f"""
@@ -745,12 +745,7 @@ def generate_lineups_html(lineups, energy_limits, username, boost_2025, stack_bo
             <p><strong>Stack Boost:</strong> {stack_boost}</p>
             <p><strong>Energy Per Non-2025 Card:</strong> {energy_per_card}</p>
         </div>
-        
-        <div class="weather-section">
-            <h2>WEATHER REPORT</h2>
-            {weather_html if weather_html else generate_weather_html()}
-        </div>
-        
+                
         <div class="lineups-section">
     """
     
@@ -883,8 +878,8 @@ def generate_weather_html():
 
                 html_content += f"""
                 <div class="rain-game-card">
-                    <p><strong>Forecast:</strong> {game['rain']:.0f}% Rain - <strong>Date:</strong> {game_date_str} - <strong>Location:</strong> {stadium_name}</p>
-                    <p><a href="https://baseballsavant.mlb.com/preview?game_pk={game_id}" target="_blank">Gameday Link</a></p>
+                    <p><strong>Forecast:</strong> {game['rain']:.0f}% Rain - <strong>Date:</strong> {game_date_str} - <strong>Location:</strong> {stadium_name} 
+                        <a href="https://baseballsavant.mlb.com/preview?game_pk={game_id}" target="_blank">Gameday Link</a></p>
                 </div>
                 """
             html_content += "</div>"

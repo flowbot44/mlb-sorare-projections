@@ -241,8 +241,26 @@ document.addEventListener('DOMContentLoaded', function () {
             });
     }
 
+    function fetchWeatherReport() {
+        fetch('/weather_report')
+            .then(response => response.json())
+            .then(data => {
+                const weatherReportContainer = document.getElementById('weatherReport');
+                if (data.success) {
+                    weatherReportContainer.innerHTML = data.weather_html;
+                } else {
+                    weatherReportContainer.innerHTML = `<p class="text-danger">Error: ${data.error}</p>`;
+                }
+            })
+            .catch(error => {
+                const weatherReportContainer = document.getElementById('weatherReport');
+                weatherReportContainer.innerHTML = `<p class="text-danger">Error fetching weather report: ${error.message}</p>`;
+            });
+    }
+
     // --- Initialization ---
     initializeLineupManagement();
     initializeEventHandlers();
     checkDatabaseStatus();
+    fetchWeatherReport();
 });

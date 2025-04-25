@@ -1,0 +1,23 @@
+<!-- templates/partials/navbar.html -->
+<nav class="navbar navbar-expand-lg navbar-light bg-light mb-4">
+    <div class="container">
+        <a class="navbar-brand" href="/">Sorare MLB Optimizer</a>
+        <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav" aria-controls="navbarNav" aria-expanded="false" aria-label="Toggle navigation">
+            <span class="navbar-toggler-icon"></span>
+        </button>
+        <div class="collapse navbar-collapse" id="navbarNav">
+            <ul class="navbar-nav me-auto">
+                <li class="nav-item">
+                    <a class="nav-link {% if active_page == 'home' %}active{% endif %}" href="/">Home</a>
+                </li>
+                <li class="nav-item">
+                    <a class="nav-link {% if active_page == 'projections' %}active{% endif %}" href="/projections">Projections</a>
+                </li>
+            </ul>
+            <div class="form-check form-switch d-flex align-items-center">
+                <label class="form-check-label me-2" for="darkModeToggle">Dark Mode</label>
+                <input class="form-check-input" type="checkbox" id="darkModeToggle">
+            </div>
+        </div>
+    </div>
+</nav>

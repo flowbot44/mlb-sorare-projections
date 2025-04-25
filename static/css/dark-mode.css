@@ -1,3 +1,8 @@
+html.dark-mode {
+    background-color: #121212;
+    color: #e0e0e0;
+}
+
 body.dark-mode {
     background-color: #121212;
     color: #e0e0e0;
@@ -181,4 +186,155 @@ body.dark-mode .low-score {
 
 body.dark-mode .progress-bar {
     background-color: #0d6efd;
+}
+
+body.dark-mode .weather-report-container {
+    background-color: #1e1e1e;
+    border-color: #444;
+    color: #e0e0e0;
+}
+
+body.dark-mode .rain-game-card {
+    background-color: #2a2a2a;
+    border-color: #444;
+}
+
+body.dark-mode {
+    background-color: #121212;
+    color: #e0e0e0;
+}
+
+.missing-pitchers-container.dark-mode {
+    background-color: #1e1e1e;
+    border: 1px solid #333;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.5);
+}
+
+.missing-pitchers-container.dark-mode h3 {
+    color: #ff6b6b; /* A softer red for dark mode */
+}
+
+.missing-pitchers-container.dark-mode p {
+    color: #b0b0b0; /* Muted text color for dark mode */
+}
+
+.missing-pitchers-container.dark-mode .list-group-item {
+    background-color: #2a2a2a;
+    color: #e0e0e0;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+}
+
+.missing-pitchers-container.dark-mode .list-group-item strong {
+    color: #4dabf7; /* A softer blue for dark mode */
+}
+
+.missing-pitchers-container.dark-mode .text-danger {
+    color: #ff6b6b; /* Softer red for warnings */
+}
+
+.missing-pitchers-container.dark-mode .text-warning {
+    color: #ffc107; /* Keep the warning color consistent */
+}
+
+.missing-pitchers-container.dark-mode a.btn-link {
+    color: #4dabf7; /* Softer blue for links */
+}
+/* Add these style enhancements to your dark-mode.css */
+/* Use higher specificity selectors */
+
+/* Ensure progress bars display correctly in dark mode */
+body.dark-mode .progress {
+    background-color: #2a2a2a !important;
+}
+
+body.dark-mode .progress-bar {
+    background-color: #0d6efd !important;
+}
+
+/* Fix score pills in dark mode */
+body.dark-mode .score-pill {
+    background-color: #444 !important;
+    color: #e0e0e0 !important;
+}
+
+body.dark-mode .score-pill.high-score {
+    background-color: #198754 !important;
+    color: white !important;
+}
+
+body.dark-mode .score-pill.med-score {
+    background-color: #ffc107 !important;
+    color: black !important;
+}
+
+body.dark-mode .score-pill.low-score {
+    background-color: #dc3545 !important;
+    color: white !important;
+}
+
+/* Ensure game cards display correctly */
+body.dark-mode .game-card {
+    background-color: #1e1e1e !important;
+    border: 1px solid #333 !important;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.5) !important;
+}
+
+/* Fix table rows */
+body.dark-mode .table-hover tbody tr:hover {
+    background-color: rgba(255, 255, 255, 0.1) !important;
+}
+
+/* Make sure player stats toggle works correctly */
+body.dark-mode .stats-toggle {
+    color: #66bfff !important;
+}
+
+body.dark-mode .raw-stats {
+    background-color: #1e1e1e !important;
+    border: 1px solid #444 !important;
+    color: #e0e0e0 !important;
+}
+
+/* Make sure all elements have consistent dark mode styling */
+body.dark-mode .form-select,
+body.dark-mode .form-control,
+body.dark-mode .input-group-text {
+    background-color: #2a2a2a !important;
+    color: #e0e0e0 !important;
+    border-color: #444 !important;
+}
+
+/* Fix game-header border radius in dark mode */
+body.dark-mode .game-header {
+    background: linear-gradient(135deg, #0a58ca, #084298) !important;
+    color: #e0e0e0 !important;
+}
+
+/* Fix pitcher highlighting in dark mode */
+body.dark-mode .pitcher {
+    background-color: rgba(255, 193, 7, 0.15) !important;
+}
+
+/* Navbar dark mode styling */
+body.dark-mode .navbar-light {
+    background-color: #2d2d2d !important;
+    border-bottom: 1px solid #444;
+}
+
+body.dark-mode .navbar-light .navbar-brand,
+body.dark-mode .navbar-light .nav-link {
+    color: #e0e0e0;
+}
+
+body.dark-mode .navbar-light .nav-link.active {
+    color: #ffffff;
+    font-weight: bold;
+}
+
+body.dark-mode .navbar-light .navbar-toggler {
+    border-color: #555;
+}
+
+body.dark-mode .navbar-light .navbar-toggler-icon {
+    filter: invert(1);
 }
