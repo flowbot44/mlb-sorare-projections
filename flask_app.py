@@ -147,7 +147,7 @@ def index():
                           default_stack_boost=STACK_BOOST,
                           default_energy_per_card=ENERGY_PER_CARD,
                           default_lineup_order=",".join(DEFAULT_LINEUP_ORDER),
-                          db_exists=db_exists)
+                          db_exists=db_exists )
 
 @app.route('/generate_lineup', methods=['POST'])
 def generate_lineup():
@@ -347,12 +347,19 @@ def check_db():
         ).fetchone()[0]
         
         conn.close()
+
+        # ✅ Get the DB last modified time
+        if os.path.exists(DATABASE_FILE):
+            db_modified = datetime.fromtimestamp(os.path.getmtime(DATABASE_FILE)).strftime("%Y-%m-%d %H:%M")
+        else:
+            db_modified = "Unknown"
         
         return jsonify({
             'status': 'connected',
             'tables': table_names,
             'game_week': game_week,
-            'projection_count': proj_count
+            'projection_count': proj_count,
+            'last_updated': db_modified
         })
     except Exception as e:
         return jsonify({
@@ -376,7 +383,7 @@ def full_update_route():
             })
     except Exception as e:
         return jsonify({'error': f"Error during full update: {str(e)}"})
-    
+
 def create_teams_table():
     """Create and populate the Teams table if it doesn't exist"""
     conn = sqlite3.connect(DATABASE_FILE)

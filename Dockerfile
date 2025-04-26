@@ -29,16 +29,17 @@ ENV SELENIUM_HEADLESS=true
 
 # Create a non-root user to run the application
 RUN useradd -m appuser
-RUN chown -R appuser:appuser /app
-USER appuser
 
 # Create directories
-RUN mkdir -p lineups
+RUN mkdir -p /app/lineups
 RUN mkdir -p /app/database
 
 # Set permissions that will apply to mounted volumes
 RUN chmod -R 777 /app/database /app/lineups
 RUN chown -R appuser:appuser /app
+
+# Switch to non-root user AFTER setting up everything
+USER appuser
 
 # Expose the port the app runs on
 EXPOSE 5000

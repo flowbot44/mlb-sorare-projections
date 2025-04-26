@@ -13,8 +13,9 @@
 <div class="optimizer-container">
     <h1 class="text-center mb-4">Sorare MLB Lineup Optimizer</h1>
    
-    <div class="db-status alert alert-secondary">
-        <strong>Status:</strong> Checking database connection...
+    <div class="db-status alert alert-success d-flex justify-content-between align-items-center">
+        <div><strong>Status:</strong> Ready</div>
+        
     </div>
     
     <!-- New database initialization container -->
@@ -71,28 +72,63 @@
                     <div class="col-md-6">
                         <label class="form-label">Lineup Order</label>
                         <ul id="activeLineup" class="list-group min-vh-50" style="min-height: 200px;">
-                          <li class="list-group-item">Common Minors</li>
+                            <li class="list-group-item draggable">
+                                <span class="drag-handle me-2">☰</span> Common Minors
+                            </li>
                         </ul>
                       </div>
                       <div class="col-md-6">
                         <label class="form-label">Inactive</label>
                         <ul id="inactiveLineup" class="list-group bg-light" style="min-height: 200px;">
-                          <li class="list-group-item">Rare Champion_1</li>
-                          <li class="list-group-item">Rare Champion_2</li>
-                          <li class="list-group-item">Rare Champion_3</li>
-                          <li class="list-group-item">Rare All-Star_1</li>
-                          <li class="list-group-item">Rare All-Star_2</li>
-                          <li class="list-group-item">Rare All-Star_3</li>
-                          <li class="list-group-item">Rare Challenger_1</li>
-                          <li class="list-group-item">Rare Challenger_2</li>
-                          <li class="list-group-item">Limited All-Star_1</li>
-                          <li class="list-group-item">Limited All-Star_2</li>
-                          <li class="list-group-item">Limited All-Star_3</li>
-                          <li class="list-group-item">Limited Champion_1</li>
-                          <li class="list-group-item">Limited Champion_2</li>
-                          <li class="list-group-item">Limited Champion_3</li>
-                          <li class="list-group-item">Limited Challenger_1</li>
-                          <li class="list-group-item">Limited Challenger_2</li>
+                          <li class="list-group-item draggable">
+                              <span class="drag-handle me-2">☰</span> Rare Champion_1
+                          </li>
+                          <li class="list-group-item draggable">
+                              <span class="drag-handle me-2">☰</span> Rare Champion_2
+                          </li>
+                          <li class="list-group-item draggable">
+                              <span class="drag-handle me-2">☰</span> Rare Champion_3
+                          </li>
+                          <li class="list-group-item draggable">
+                              <span class="drag-handle me-2">☰</span> Rare All-Star_1
+                          </li>
+                          <li class="list-group-item draggable">
+                              <span class="drag-handle me-2">☰</span> Rare All-Star_2
+                          </li>
+                          <li class="list-group-item draggable">
+                              <span class="drag-handle me-2">☰</span> Rare All-Star_3
+                          </li>
+                          <li class="list-group-item draggable">
+                              <span class="drag-handle me-2">☰</span> Rare Challenger_1
+                          </li>
+                          <li class="list-group-item draggable">
+                              <span class="drag-handle me-2">☰</span> Rare Challenger_2
+                          </li>
+                          <li class="list-group-item draggable">
+                              <span class="drag-handle me-2">☰</span> Limited All-Star_1
+                          </li>
+                          <li class="list-group-item draggable">
+                              <span class="drag-handle me-2">☰</span> Limited All-Star_2
+                          </li>
+                          <li class="list-group-item draggable">
+                              <span class="drag-handle me-2">☰</span> Limited All-Star_3
+                          </li>
+                          <li class="list-group-item draggable">
+                              <span class="drag-handle me-2">☰</span> Limited Champion_1
+                          </li>
+                          <li class="list-group-item draggable">
+                              <span class="drag-handle me-2">☰</span> Limited Champion_2
+                          </li>
+                          <li class="list-group-item draggable">
+                              <span class="drag-handle me-2">☰</span> Limited Champion_3
+                          </li>
+                          <li class="list-group-item draggable">
+                              <span class="drag-handle me-2">☰</span> Limited Challenger_1
+                          </li>
+                          <li class="list-group-item draggable">
+                              <span class="drag-handle me-2">☰</span> Limited Challenger_2
+                          </li>
+                          
                         </ul>
                       </div>
                   </div>
