@@ -33,7 +33,6 @@ RUN mkdir -p /app/database
 
 # Set permissions that will apply to mounted volumes
 RUN chmod -R 777 /app/database /app/lineups
-RUN chown -R appuser:appuser /app
 
 # Expose the port the app runs on
 EXPOSE 5000
