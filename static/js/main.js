@@ -211,10 +211,6 @@ document.addEventListener('DOMContentLoaded', function () {
                 });
         });
 
-        document.getElementById('fullRefreshBtn').addEventListener('click', () => {
-            if (!confirm('WARNING: This will completely refresh the database from scratch. Continue?')) return;
-            runFullUpdate();
-        });
 
         document.getElementById('fullUpdateBtn').addEventListener('click', runFullUpdate);
     }
@@ -242,7 +238,9 @@ document.addEventListener('DOMContentLoaded', function () {
 
     function fetchWeatherReport() {
         fetch('/weather_report')
-            .then(response => response.json())
+            .then(response => {
+                return response.json();
+            })
             .then(data => {
                 const weatherReportContainer = document.getElementById('weatherReport');
                 if (data.success) {
