@@ -126,8 +126,7 @@ document.addEventListener('DOMContentLoaded', function () {
                     statusDiv.innerHTML = `
                         <strong>Database Connected:</strong> 
                         Game Week: ${data.game_week} | 
-                        Tables: ${data.tables.join(', ')} | 
-                        Projections: ${data.projection_count}
+                        <small><strong>Last Updated:</strong> ${data.last_updated}</small>
                     `;
                     generateBtn.disabled = false;
                     dbInitContainer.style.display = 'none';

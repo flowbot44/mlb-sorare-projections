@@ -133,3 +133,16 @@ body {
 .nav-link:hover {
     color: #0a58ca;
 }
+
+.draggable {
+    cursor: grab;
+    display: flex;
+    align-items: center;
+  }
+  
+.drag-handle {
+    font-size: 1.2rem;
+    cursor: grab;
+    color: #888;
+    user-select: none;
+  }
