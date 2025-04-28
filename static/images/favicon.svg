@@ -1,0 +1,20 @@
+<svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg">
+  <!-- Baseball field background -->
+  <rect x="2" y="2" width="60" height="60" rx="8" fill="#4b7b2a" />
+  <path d="M32 2 L62 32 L32 62 L2 32 Z" fill="#8cc63f" />
+  
+  <!-- Diamond shape -->
+  <rect x="17" y="17" width="30" height="30" rx="2" transform="rotate(45 32 32)" fill="#d4a76a" stroke="#fff" stroke-width="2" />
+  
+  <!-- Home plate -->
+  <polygon points="32,43 28,39 36,39" fill="#fff" />
+  
+  <!-- Bases -->
+  <rect x="30" y="17" width="4" height="4" fill="#fff" />
+  <rect x="43" y="30" width="4" height="4" fill="#fff" />
+  <rect x="17" y="30" width="4" height="4" fill="#fff" />
+  
+  <!-- 'S' letter for Sorare -->
+  <path d="M32 26 Q36 26 36 29 Q36 32 32 32 Q28 32 28 35 Q28 38 32 38 Q34 38 36 36" 
+        stroke="#1a5fb4" stroke-width="4" stroke-linecap="round" fill="none" />
+</svg>

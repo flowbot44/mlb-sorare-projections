@@ -21,41 +21,50 @@ document.addEventListener('DOMContentLoaded', function () {
         function saveLineupConfiguration() {
             const username = usernameInput.value.trim();
             if (!username) return;
-
+        
             const activeItems = Array.from(active.querySelectorAll('li')).map(item => item.textContent.trim());
             const inactiveItems = Array.from(inactive.querySelectorAll('li')).map(item => item.textContent.trim());
-
+        
             const config = {
                 active: activeItems,
                 inactive: inactiveItems,
                 timestamp: Date.now()
             };
-
-            localStorage.setItem(`sorare-lineup-${username}`, JSON.stringify(config));
+        
+            try {
+                localStorage.setItem(`sorare-lineup-${username}`, JSON.stringify(config));
+            } catch (e) {
+                console.warn("Unable to save lineup to localStorage:", e);
+                // Optionally show a message to the user
+            }
         }
 
         function loadLineupConfiguration(username) {
-            const savedConfig = localStorage.getItem(`sorare-lineup-${username}`);
-            if (!savedConfig) return;
+            try {
+                const savedConfig = localStorage.getItem(`sorare-lineup-${username}`);
+                if (!savedConfig) return;
+        
+                const config = JSON.parse(savedConfig);
 
-            const config = JSON.parse(savedConfig);
-
-            // Reset lineups
-            while (active.children.length > 0) {
-                inactive.appendChild(active.children[0]);
-            }
-
-            // Restore active lineup
-            config.active.forEach(itemText => {
-                const matchingItem = Array.from(inactive.querySelectorAll('li')).find(
-                    li => li.textContent.trim() === itemText
-                );
-                if (matchingItem) {
-                    active.appendChild(matchingItem);
+                // Reset lineups
+                while (active.children.length > 0) {
+                    inactive.appendChild(active.children[0]);
                 }
-            });
 
-            updateLineupOrder(false);
+                // Restore active lineup
+                config.active.forEach(itemText => {
+                    const matchingItem = Array.from(inactive.querySelectorAll('li')).find(
+                        li => li.textContent.trim() === itemText
+                    );
+                    if (matchingItem) {
+                        active.appendChild(matchingItem);
+                    }
+                });
+
+                updateLineupOrder(false);
+            } catch (e) {
+                console.warn("Unable to load lineup from localStorage:", e);
+            }
         }
 
         // Initialize Sortable.js
@@ -63,7 +72,7 @@ document.addEventListener('DOMContentLoaded', function () {
             group: 'lineups',
             animation: 150,
             multiDrag: true,
-            selectedClass: 'bg-info text-white',
+            selectedClass: 'selected-item',
             onSort: () => updateLineupOrder(true),
             onAdd: () => updateLineupOrder(true),
             onRemove: () => updateLineupOrder(true)
