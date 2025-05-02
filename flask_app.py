@@ -161,11 +161,20 @@ def generate_lineup():
     energy_per_card = int(request.form.get('energy_per_card', ENERGY_PER_CARD))
     lineup_order = request.form.get('lineup_order', ','.join(DEFAULT_LINEUP_ORDER))
     ignore_players = request.form.get('ignore_players', '')
+    ignore_games = request.form.get('ignore_games', '')
     
-    # Parse ignore list
+    # Parse ignore players list
     ignore_list = []
     if ignore_players:
         ignore_list = [name.strip() for name in ignore_players.split(',') if name.strip()]
+    
+    # Parse ignore games list
+    ignore_game_ids = []
+    if ignore_games:
+        try:
+            ignore_game_ids = [int(game_id.strip()) for game in ignore_games.split(',') if (game_id := game.strip()).isdigit()]
+        except Exception as e:
+            return jsonify({'error': f"Error parsing game IDs: {str(e)}. Make sure all IDs are valid integers."})
     
     # Parse custom lineup order
     try:
@@ -192,7 +201,9 @@ def generate_lineup():
         
         # THEN: Fetch cards from the database
         cards_df = fetch_cards(username)
-        projections_df = fetch_projections()
+        
+        # Pass ignore_game_ids to fetch_projections
+        projections_df = fetch_projections(ignore_game_ids=ignore_game_ids)
         
         if cards_df.empty:
             return jsonify({'error': f"No eligible cards found for {username}."})
@@ -225,7 +236,8 @@ def generate_lineup():
         # Return success with HTML content
         return jsonify({
             'success': True,
-            'lineup_html': lineup_html
+            'lineup_html': lineup_html,
+            'ignored_games': len(ignore_game_ids)  # Adding info about ignored games
         })
         
     except Exception as e:

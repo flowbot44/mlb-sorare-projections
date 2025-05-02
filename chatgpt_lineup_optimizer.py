@@ -81,16 +81,41 @@ def fetch_cards(username: str) -> pd.DataFrame:
 
     return cards_df
 
-def fetch_projections() -> pd.DataFrame:
-    """Fetch Sorare projections for the current game week with team separation."""
+def fetch_projections(ignore_game_ids: list = None) -> pd.DataFrame:
+    """
+    Fetch Sorare projections for the current game week with team separation.
+    
+    Args:
+        ignore_game_ids: Optional list of game IDs to exclude from the results
+        
+    Returns:
+        DataFrame with player projections
+    """
     with get_db_connection() as conn:
+        current_game_week = determine_game_week()
+        
+        # Base query
         query = """
             SELECT player_name, team_id, SUM(sorare_score) AS total_projection 
-            FROM AdjustedProjections WHERE game_week = ?
-            GROUP BY player_name, team_id
+            FROM AdjustedProjections 
+            WHERE game_week = ?
         """
-        projections_df = pd.read_sql(query, conn, params=(determine_game_week(),))
+        
+        params = [current_game_week]
+        
+        # Add filter for ignored game IDs if provided
+        if ignore_game_ids and len(ignore_game_ids) > 0:
+            placeholder = ','.join(['?'] * len(ignore_game_ids))
+            query += f" AND game_id NOT IN ({placeholder})"
+            params.extend(ignore_game_ids)
+        
+        # Complete the query with grouping
+        query += " GROUP BY player_name, team_id"
+        
+        # Execute query and return dataframe
+        projections_df = pd.read_sql(query, conn, params=params)
         projections_df["total_projection"] = projections_df["total_projection"].fillna(0).infer_objects(copy=False)
+    
     return projections_df
 
 def can_fill_position(card_positions: Optional[str], slot: str) -> bool:
@@ -852,20 +877,22 @@ def generate_weather_html():
     
     try:
         high_rain_games = fetch_high_rain_games_details()
-
+        
         if high_rain_games.empty:
-            html_content += "<p>No games found with a high rain probability (>= 75%) in the forecast.</p>"
+            html_content += "<div class='alert alert-info'>No games found with a high rain probability (>= 75%) in the forecast.</div>"
         else:
-            html_content += f"<p>Found {len(high_rain_games)} game(s) with >= 75% rain probability:</p>"
+            html_content += f"<div class='alert alert-warning'><strong>Found {len(high_rain_games)} game(s) with >= 75% rain probability</strong></div>"
             html_content += "<p>These games <em>may</em> face delays or postponement:</p>"
             
-            html_content += "<div class='rain-games'>"
+            html_content += "<div class='table-responsive'><table class='table'>"
+            html_content += "<thead><tr><th>Game</th><th>Date</th><th>Forecast</th><th>Action</th></tr></thead><tbody>"
+            
             for _, game in high_rain_games.iterrows():
                 game_id = int(game['game_id'])
                 stadium_name = game['stadium_name'] if pd.notna(game['stadium_name']) else "Unknown Stadium"
-                away_team = f"Team {game['away_team_id']}"
-                home_team = f"Team {game['home_team_id']}"
-
+                away_team = f"{game['away_team_id']}" if pd.notna(game['away_team_id']) else "Away"
+                home_team = f"{game['home_team_id']}" if pd.notna(game['home_team_id']) else "Home"
+                
                 game_date_str = "Date Unknown"
                 try:
                     # Parse the date string (assuming YYYY-MM-DD format from DB)
@@ -874,17 +901,24 @@ def generate_weather_html():
                     game_date_str = game_date_obj.strftime("%a, %b %d, %Y") # Format: Fri, Apr 11, 2025
                 except Exception:
                     pass
-
+                
                 html_content += f"""
-                <div class="rain-game-card">
-                    <p><strong>Forecast:</strong> {game['rain']:.0f}% Rain - <strong>Date:</strong> {game_date_str} - <strong>Location:</strong> {stadium_name} 
-                        <a href="https://baseballsavant.mlb.com/preview?game_pk={game_id}" target="_blank">Gameday Link</a></p>
-                </div>
+                <tr data-game-id="{game_id}">
+                    <td>{away_team} @ {home_team}<br><small>{stadium_name}</small></td>
+                    <td>{game_date_str}</td>
+                    <td><span class="badge bg-danger">{game['rain']:.0f}% Rain</span></td>
+                    <td>
+                        <button class="btn btn-sm btn-warning ignore-game-btn" data-game-id="{game_id}">
+                            Ignore Game
+                        </button>
+                    </td>
+                </tr>
                 """
-            html_content += "</div>"
-
+            
+            html_content += "</tbody></table></div>"
+    
     except Exception as e:
-        html_content += f"<p class='error'>Error generating weather report: {e}</p>"
+        html_content += f"<div class='alert alert-danger'>Error generating weather report: {e}</div>"
     
     return html_content
 
