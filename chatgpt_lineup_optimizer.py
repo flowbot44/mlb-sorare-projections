@@ -89,7 +89,7 @@ def fetch_projections() -> pd.DataFrame:
             FROM AdjustedProjections WHERE game_week = ?
             GROUP BY player_name, team_id
         """
-        projections_df = pd.read_sql(query, conn, params=(determine_game_week()))
+        projections_df = pd.read_sql(query, conn, params=(determine_game_week(),))
         projections_df["total_projection"] = projections_df["total_projection"].fillna(0).infer_objects(copy=False)
     return projections_df
 
