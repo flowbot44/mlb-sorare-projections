@@ -43,7 +43,6 @@ def determine_game_week(current_date=None):
         current_date = datetime.now().date()
     elif isinstance(current_date, str):
         current_date = datetime.strptime(current_date, '%Y-%m-%d').date()
-
     season_start = date(2025, 3, 27)
     if current_date <= date(2025, 3, 29):
         start_date = season_start
