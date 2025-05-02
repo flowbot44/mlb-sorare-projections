@@ -12,7 +12,6 @@ from datetime import datetime, timedelta
 class Config:
     DB_PATH = DATABASE_FILE
     USERNAME = "flowbot44"
-    GAME_WEEK = determine_game_week()
     SHOHEI_NAME = "shohei-ohtani"
     BOOST_2025 = 5.0
     STACK_BOOST = 2.0
@@ -90,7 +89,7 @@ def fetch_projections() -> pd.DataFrame:
             FROM AdjustedProjections WHERE game_week = ?
             GROUP BY player_name, team_id
         """
-        projections_df = pd.read_sql(query, conn, params=(Config.GAME_WEEK,))
+        projections_df = pd.read_sql(query, conn, params=(determine_game_week()))
         projections_df["total_projection"] = projections_df["total_projection"].fillna(0).infer_objects(copy=False)
     return projections_df
 
@@ -550,7 +549,7 @@ def generate_sealed_cards_report(username: str) -> str:
         report_content.append("=" * 80)
         
         # Get game week dates
-        game_week = Config.GAME_WEEK
+        game_week = determine_game_week()
         try:
             # Parse the game week to get start and end dates
             start_date_str, end_date_str = game_week.split("_to_")
@@ -665,7 +664,7 @@ def save_lineups(lineups: Dict[str, Dict], output_file: str, energy_limits: Dict
     """Save lineups to a file with energy usage and print remaining energy."""
     os.makedirs(os.path.dirname(output_file), exist_ok=True)
     with open(output_file, "w") as f:
-        f.write(f"Lineups for Game Week {Config.GAME_WEEK}\n")
+        f.write(f"Lineups for Game Week {determine_game_week()}\n")
         f.write(f"Username: {username}\n")
         f.write(f"2025 Card Boost: {boost_2025}\n")
         f.write(f"Stack Boost: {stack_boost}\n")
@@ -738,7 +737,7 @@ def generate_lineups_html(lineups, energy_limits, username, boost_2025, stack_bo
     
     html_content = f"""
     <div class="lineup-container">
-        <h1>Lineups for Game Week {Config.GAME_WEEK}</h1>
+        <h1>Lineups for Game Week {determine_game_week()}</h1>
         <div class="lineup-header">
             <p><strong>Username:</strong> {username}</p>
             <p><strong>2025 Card Boost:</strong> {boost_2025}</p>
@@ -904,7 +903,7 @@ def generate_sealed_cards_html(username: str) -> str:
         html_content += f"<p>Sealed Cards Report generated on: {current_date.strftime('%Y-%m-%d')}</p>"
         
         # Get game week dates
-        game_week = Config.GAME_WEEK
+        game_week = determine_game_week()
         try:
             # Parse the game week to get start and end dates
             start_date_str, end_date_str = game_week.split("_to_")
@@ -1119,7 +1118,7 @@ def main():
         energy_limits = {"rare": args.rare_energy, "limited": args.limited_energy}
         print(f"Using energy limits: Rare={energy_limits['rare']}, Limited={energy_limits['limited']}")
         print(f"Username: {args.username}")
-        print(f"Game Week: {Config.GAME_WEEK}")  # Print to confirm
+        print(f"Game Week: {determine_game_week()}")  # Print to confirm
         print(f"2025 Card Boost: {args.boost_2025}")
         print(f"Stack Boost: {args.stack_boost}")
         print(f"Energy Per Non-2025 Card: {args.energy_per_card}")
