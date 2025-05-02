@@ -140,7 +140,7 @@ def index():
     
     return render_template('index.html', 
                           active_page='home', 
-                          game_week=Config.GAME_WEEK,
+                          game_week=determine_game_week(),
                           default_rare_energy=DEFAULT_ENERGY_LIMITS["rare"],
                           default_limited_energy=DEFAULT_ENERGY_LIMITS["limited"],
                           default_boost_2025=BOOST_2025,
@@ -197,7 +197,7 @@ def generate_lineup():
         if cards_df.empty:
             return jsonify({'error': f"No eligible cards found for {username}."})
         if projections_df.empty:
-            return jsonify({'error': f"No projections available for game week {Config.GAME_WEEK}. Update the database first."})
+            return jsonify({'error': f"No projections available for game week {determine_game_week()}. Update the database first."})
         
         # Generate lineups
         lineups = build_all_lineups(
@@ -332,7 +332,7 @@ def check_db():
         missing_tables = [table for table in required_tables if table not in table_names]
         
         # Get game week info
-        game_week = Config.GAME_WEEK
+        game_week = determine_game_week()
 
         if missing_tables:
             return jsonify({
