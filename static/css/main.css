@@ -151,3 +151,86 @@ body {
     background-color: var(--bs-info) !important;
     color: white !important;
 }
+
+
+
+
+/* Weather Report Styling */
+.weather-report-container {
+    margin: 20px 0;
+}
+
+.weather-report-container .card-header {
+    font-weight: 500;
+}
+
+.weather-report-container .badge {
+    font-size: 85%;
+}
+
+/* Styling for the ignore game button */
+.ignore-game-btn {
+    transition: all 0.2s ease;
+}
+
+.ignore-game-btn:hover {
+    transform: scale(1.05);
+}
+
+/* Style for games that are already being ignored */
+.table-secondary {
+    background-color: #f2f2f2 !important;
+    color: #6c757d;
+}
+
+/* Status badges */
+.badge.bg-danger {
+    font-weight: normal;
+    padding: 5px 8px;
+}
+
+/* Make the weather table more compact */
+.weather-report-container .table {
+    font-size: 0.95rem;
+}
+
+.weather-report-container .table td {
+    vertical-align: middle;
+    padding: 0.5rem;
+}
+
+/* Highlight rows on hover */
+.weather-report-container .table tbody tr:hover {
+    background-color: rgba(0, 123, 255, 0.05);
+}
+
+/* Style for the refresh button */
+#refreshWeatherBtn {
+    transition: all 0.2s ease;
+}
+
+#refreshWeatherBtn:hover {
+    background-color: #e2e6ea;
+}
+
+/* Animations for weather loading */
+@keyframes fadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+
+.weather-report-container .table {
+    animation: fadeIn 0.5s ease-in-out;
+}
+
+/* Improve mobile responsiveness */
+@media (max-width: 767.98px) {
+    .weather-report-container .table {
+        font-size: 0.85rem;
+    }
+    
+    .ignore-game-btn {
+        padding: 0.25rem 0.5rem;
+        font-size: 0.75rem;
+    }
+}

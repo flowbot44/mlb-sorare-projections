@@ -245,28 +245,189 @@ document.addEventListener('DOMContentLoaded', function () {
             });
     }
 
-    function fetchWeatherReport() {
-        fetch('/weather_report')
-            .then(response => {
-                return response.json();
-            })
-            .then(data => {
-                const weatherReportContainer = document.getElementById('weatherReport');
-                if (data.success) {
-                    weatherReportContainer.innerHTML = data.weather_html;
-                } else {
-                    weatherReportContainer.innerHTML = `<p class="text-danger">Error: ${data.error}</p>`;
-                }
-            })
-            .catch(error => {
-                const weatherReportContainer = document.getElementById('weatherReport');
-                weatherReportContainer.innerHTML = `<p class="text-danger">Error fetching weather report: ${error.message}</p>`;
-            });
-    }
-
     // --- Initialization ---
     initializeLineupManagement();
     initializeEventHandlers();
     checkDatabaseStatus();
-    fetchWeatherReport();
+    loadWeatherReport();
+    initializeIgnoreGamesClearButton();
+    
+    // Set up event delegation for the ignore game buttons that will be added dynamically
+    document.getElementById('weatherReport').addEventListener('click', function(e) {
+        if (e.target && e.target.classList.contains('ignore-game-btn')) {
+            const gameId = e.target.getAttribute('data-game-id');
+            addGameToIgnoreList(gameId);
+            
+            // Update button state
+            e.target.classList.remove('btn-warning');
+            e.target.classList.add('btn-secondary');
+            e.target.textContent = 'Added to Ignore List';
+            e.target.disabled = true;
+            
+            // Highlight the row to indicate it's been added
+            const row = e.target.closest('tr');
+            row.classList.add('table-secondary');
+        }
+    });
+
+    // Set up the refresh weather button event listener
+    const refreshWeatherBtn = document.getElementById('refreshWeatherBtn');
+    if (refreshWeatherBtn) {
+        refreshWeatherBtn.addEventListener('click', function() {
+            this.disabled = true;
+            this.innerHTML = '<i class="bi bi-arrow-clockwise"></i> Refreshing...';
+            
+            loadWeatherReport().then(() => {
+                this.disabled = false;
+                this.innerHTML = '<i class="bi bi-arrow-clockwise"></i> Refresh';
+            });
+        });
+    }
 });
+
+/**
+ * Load the weather report from the server
+ * Made global so it can be called from anywhere
+ * @returns {Promise} A promise that resolves when the weather report is loaded
+ */
+function loadWeatherReport() {
+    return fetch('/weather_report')
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                document.getElementById('weatherReport').innerHTML = data.weather_html;
+                
+                // After loading weather report, check which games are already in ignore list
+                updateWeatherReportButtons();
+            } else {
+                document.getElementById('weatherReport').innerHTML = '<div class="alert alert-danger">Failed to load weather report</div>';
+            }
+            return data;
+        })
+        .catch(error => {
+            document.getElementById('weatherReport').innerHTML = `<div class="alert alert-danger">Error: ${error.message}</div>`;
+            throw error;
+        });
+}
+
+/**
+ * Add a game ID to the ignore games input field
+ */
+function addGameToIgnoreList(gameId) {
+    const ignoreGamesInput = document.getElementById('ignore_games');
+    let currentIds = ignoreGamesInput.value.split(',').map(id => id.trim()).filter(id => id);
+    
+    // Only add the ID if it's not already in the list
+    if (!currentIds.includes(gameId)) {
+        currentIds.push(gameId);
+        ignoreGamesInput.value = currentIds.join(', ');
+        
+        // Show feedback to the user
+        const alertHtml = `
+            <div class="alert alert-success alert-dismissible fade show mt-2" role="alert">
+                Game ID ${gameId} added to ignore list
+                <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+            </div>
+        `;
+        
+        const alertContainer = document.createElement('div');
+        alertContainer.innerHTML = alertHtml;
+        document.querySelector('.weather-report-container').appendChild(alertContainer.firstElementChild);
+        
+        // Auto dismiss after 3 seconds
+        setTimeout(() => {
+            const alert = document.querySelector('.weather-report-container .alert');
+            if (alert) {
+                alert.remove();
+            }
+        }, 3000);
+    }
+}
+
+/**
+ * Update the ignore game buttons based on what's already in the ignore list
+ */
+function updateWeatherReportButtons() {
+    const ignoreGamesInput = document.getElementById('ignore_games');
+    const currentIds = ignoreGamesInput.value.split(',').map(id => id.trim()).filter(id => id);
+    
+    // Find all the ignore game buttons in the weather report
+    const ignoreButtons = document.querySelectorAll('.ignore-game-btn');
+    
+    ignoreButtons.forEach(button => {
+        const gameId = button.getAttribute('data-game-id');
+        
+        if (currentIds.includes(gameId)) {
+            // This game is already being ignored, update the button
+            button.classList.remove('btn-warning');
+            button.classList.add('btn-secondary');
+            button.textContent = 'Added to Ignore List';
+            button.disabled = true;
+            
+            // Also update the row
+            const row = button.closest('tr');
+            if (row) {
+                row.classList.add('table-secondary');
+            }
+        }
+    });
+}
+
+/**
+ * Add a clear button to the ignore games list
+ */
+function initializeIgnoreGamesClearButton() {
+    const ignoreGamesInput = document.getElementById('ignore_games');
+    if (!ignoreGamesInput) return;
+    
+    const inputGroup = ignoreGamesInput.parentElement;
+    
+    // Check if we already have the clear button
+    if (document.getElementById('clearIgnoreGamesBtn')) return;
+    
+    // Create the clear button
+    const clearButtonHtml = `
+        <button class="btn btn-outline-secondary" type="button" id="clearIgnoreGamesBtn" title="Clear all ignored games">
+            <i class="bi bi-x-circle"></i> Clear
+        </button>
+    `;
+    
+    // Wrap the input in an input group if it's not already
+    if (!inputGroup.classList.contains('input-group')) {
+        const wrapper = document.createElement('div');
+        wrapper.className = 'input-group';
+        ignoreGamesInput.parentNode.insertBefore(wrapper, ignoreGamesInput);
+        wrapper.appendChild(ignoreGamesInput);
+        wrapper.insertAdjacentHTML('beforeend', clearButtonHtml);
+    } else {
+        inputGroup.insertAdjacentHTML('beforeend', clearButtonHtml);
+    }
+    
+    // Add the event listener
+    document.getElementById('clearIgnoreGamesBtn').addEventListener('click', function() {
+        ignoreGamesInput.value = '';
+        
+        // Update the weather report buttons
+        updateWeatherReportButtons();
+        
+        // Show feedback
+        const alertHtml = `
+            <div class="alert alert-info alert-dismissible fade show mt-2" role="alert">
+                Ignore games list cleared
+                <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+            </div>
+        `;
+        
+        const alertContainer = document.createElement('div');
+        alertContainer.innerHTML = alertHtml;
+        document.querySelector('.form-container').appendChild(alertContainer.firstElementChild);
+        
+        // Auto dismiss after 3 seconds
+        setTimeout(() => {
+            const alert = document.querySelector('.form-container .alert');
+            if (alert) {
+                alert.remove();
+            }
+        }, 3000);
+    });
+}
