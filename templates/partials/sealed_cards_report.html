@@ -1,0 +1,75 @@
+<p>Sealed Cards Report generated on: {{ current_date.strftime('%Y-%m-%d') }}</p>
+
+<div class="sealed-projections">
+    <h3>SEALED CARDS WITH UPCOMING PROJECTIONS</h3>
+    
+    {% if projections_df is not none and projections_df|length > 0 %}
+        <p>Found {{ projections_df|length }} distinct sealed cards with upcoming projections:</p>
+        
+        <table class="sealed-cards-table">
+            <thead>
+                <tr>
+                    <th>Name</th>
+                    <th>Year</th>
+                    <th>Rarity</th>
+                    <th>Upcoming Games</th>
+                    <th>Total Score</th>
+                    <th>Avg Score</th>
+                    <th>Next Game</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for _, row in projections_df.iterrows() %}
+                <tr>
+                    <td>{{ row['Name'] }}</td>
+                    <td>{{ row['Year'] }}</td>
+                    <td>{{ row['Rarity'] }}</td>
+                    <td>{{ row['Upcoming Games'] }}</td>
+                    <td>{{ row['Total Projected Score']|round(2) }}</td>
+                    <td>{{ row['Avg Score/Game']|round(2) }}</td>
+                    <td>{{ row['Next Game Date'] }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    {% else %}
+        <p>No sealed cards with upcoming projections found.</p>
+    {% endif %}
+</div>
+
+<div class="injured-sealed-cards">
+    <h3>INJURED SEALED CARDS RETURNING DURING GAME WEEK ({{ start_date.strftime('%Y-%m-%d') }} to {{ end_date.strftime('%Y-%m-%d') }})</h3>
+    
+    {% if injured_df is not none and injured_df|length > 0 %}
+        <p>Found {{ injured_df|length }} injured sealed cards expected to return during game week:</p>
+        
+        <table class="injured-cards-table">
+            <thead>
+                <tr>
+                    <th>Name</th>
+                    <th>Year</th>
+                    <th>Rarity</th>
+                    <th>Status</th>
+                    <th>Description</th>
+                    <th>Return Estimate</th>
+                    <th>Team</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for _, row in injured_df.iterrows() %}
+                <tr>
+                    <td>{{ row['Name'] }}</td>
+                    <td>{{ row['Year'] }}</td>
+                    <td>{{ row['Rarity'] }}</td>
+                    <td>{{ row['Status'] }}</td>
+                    <td>{{ row['Description'] }}</td>
+                    <td>{{ row['Return Estimate'] }}</td>
+                    <td>{{ row['Team'] }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    {% else %}
+        <p>No injured sealed cards expected to return during game week.</p>
+    {% endif %}
+</div> 

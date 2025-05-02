@@ -173,7 +173,7 @@ document.addEventListener('DOMContentLoaded', function () {
             const formData = new FormData(lineupForm);
 
             // Send a POST request to generate lineups
-            fetch('/generate_lineup', {
+            fetch('/generate', {
                 method: 'POST',
                 body: formData,
             })
@@ -188,6 +188,9 @@ document.addEventListener('DOMContentLoaded', function () {
                         const resultsContainer = document.getElementById('lineupResults');
                         resultsContainer.innerHTML = data.lineup_html; // Assuming the server returns HTML for the lineups
                         document.querySelector('.results-container').style.display = 'block';
+                        
+                        // Update the displayed username in the results
+                        document.getElementById('results-username').textContent = document.getElementById('username').value;
                     }
                 })
                 .catch((error) => {
@@ -249,7 +252,7 @@ document.addEventListener('DOMContentLoaded', function () {
     initializeLineupManagement();
     initializeEventHandlers();
     checkDatabaseStatus();
-    loadWeatherReport();
+    updateWeatherReportButtons();
     initializeIgnoreGamesClearButton();
     
     // Set up event delegation for the ignore game buttons that will be added dynamically
@@ -380,31 +383,36 @@ function initializeIgnoreGamesClearButton() {
     const ignoreGamesInput = document.getElementById('ignore_games');
     if (!ignoreGamesInput) return;
     
-    const inputGroup = ignoreGamesInput.parentElement;
+    // Find the clear button, whether it was created dynamically or exists in HTML
+    let clearButton = document.getElementById('clearIgnoreGamesBtn');
     
-    // Check if we already have the clear button
-    if (document.getElementById('clearIgnoreGamesBtn')) return;
-    
-    // Create the clear button
-    const clearButtonHtml = `
-        <button class="btn btn-outline-secondary" type="button" id="clearIgnoreGamesBtn" title="Clear all ignored games">
-            <i class="bi bi-x-circle"></i> Clear
-        </button>
-    `;
-    
-    // Wrap the input in an input group if it's not already
-    if (!inputGroup.classList.contains('input-group')) {
-        const wrapper = document.createElement('div');
-        wrapper.className = 'input-group';
-        ignoreGamesInput.parentNode.insertBefore(wrapper, ignoreGamesInput);
-        wrapper.appendChild(ignoreGamesInput);
-        wrapper.insertAdjacentHTML('beforeend', clearButtonHtml);
-    } else {
-        inputGroup.insertAdjacentHTML('beforeend', clearButtonHtml);
+    // If button doesn't exist, create it
+    if (!clearButton) {
+        const inputGroup = ignoreGamesInput.parentElement;
+        
+        // Create the clear button
+        const clearButtonHtml = `
+            <button class="btn btn-outline-secondary" type="button" id="clearIgnoreGamesBtn" title="Clear all ignored games">
+                <i class="bi bi-x-circle"></i> Clear
+            </button>
+        `;
+        
+        // Wrap the input in an input group if it's not already
+        if (!inputGroup.classList.contains('input-group')) {
+            const wrapper = document.createElement('div');
+            wrapper.className = 'input-group';
+            ignoreGamesInput.parentNode.insertBefore(wrapper, ignoreGamesInput);
+            wrapper.appendChild(ignoreGamesInput);
+            wrapper.insertAdjacentHTML('beforeend', clearButtonHtml);
+        } else {
+            inputGroup.insertAdjacentHTML('beforeend', clearButtonHtml);
+        }
+        
+        clearButton = document.getElementById('clearIgnoreGamesBtn');
     }
     
-    // Add the event listener
-    document.getElementById('clearIgnoreGamesBtn').addEventListener('click', function() {
+    // Add the event listener - this happens whether the button was just created or already existed
+    clearButton.addEventListener('click', function() {
         ignoreGamesInput.value = '';
         
         // Update the weather report buttons
