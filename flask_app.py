@@ -5,14 +5,14 @@ import subprocess
 import time
 from flask import Flask, render_template, request, jsonify, send_file
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timedelta
 import sqlite3
 
 # Import existing functionality
 from chatgpt_lineup_optimizer import (
-    fetch_cards, fetch_projections, build_all_lineups, generate_lineups_html, generate_weather_html, 
-    save_lineups, Config, get_db_connection,
-    generate_sealed_cards_report
+    fetch_cards, fetch_projections, build_all_lineups, 
+    Config, get_db_connection,
+    fetch_high_rain_games_details
 )
 from card_fetcher import SorareMLBClient
 from injury_updates import fetch_injury_data, update_database
@@ -22,6 +22,9 @@ import logging
 
 # Initialize Flask app
 app = Flask(__name__)
+
+# Add zip function to Jinja2 environment
+app.jinja_env.globals.update(zip=zip)
 
 # Script directory for running updates
 script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -132,11 +135,66 @@ def run_full_update():
         print(f"Error during full update: {str(e)}")
         return False
 
+def add_team_names_to_games(high_rain_games):
+    """Add team names to a DataFrame of games"""
+    if high_rain_games.empty:
+        return high_rain_games
+        
+    try:
+        conn = get_db_connection()
+        # Get home team names
+        for i, game in high_rain_games.iterrows():
+            home_team_id = game['home_team_id']
+            away_team_id = game['away_team_id']
+            
+            # Get home team name
+            home_team_query = "SELECT name FROM Teams WHERE id = ?"
+            home_team_name = conn.execute(home_team_query, (home_team_id,)).fetchone()
+            high_rain_games.at[i, 'home_team_name'] = home_team_name[0] if home_team_name else f"Team {home_team_id}"
+            
+            # Get away team name
+            away_team_query = "SELECT name FROM Teams WHERE id = ?"
+            away_team_name = conn.execute(away_team_query, (away_team_id,)).fetchone()
+            high_rain_games.at[i, 'away_team_name'] = away_team_name[0] if away_team_name else f"Team {away_team_id}"
+        
+        conn.close()
+    except Exception as e:
+        print(f"Error adding team names: {e}")
+    
+    return high_rain_games
+    
+def format_game_dates(high_rain_games):
+    """Format game dates in a DataFrame of games"""
+    if high_rain_games.empty:
+        return high_rain_games
+        
+    for i, game in high_rain_games.iterrows():
+        try:
+            # Parse the date string (assuming YYYY-MM-DD format from DB)
+            game_date_obj = datetime.strptime(str(game['game_date']), '%Y-%m-%d').date()
+            # Format the date clearly
+            high_rain_games.at[i, 'game_date_formatted'] = game_date_obj.strftime("%a, %b %d, %Y")
+        except Exception:
+            high_rain_games.at[i, 'game_date_formatted'] = "Date Unknown"
+    
+    return high_rain_games
+
 @app.route('/')
 def index():
     """Render the main page with the lineup optimizer form"""
     # Check if database exists and is properly set up
     db_exists = check_and_create_db()
+    
+    # Fetch high rain games for weather report
+    try:
+        high_rain_games = fetch_high_rain_games_details()
+        
+        # Format game dates and add team names
+        high_rain_games = format_game_dates(high_rain_games)
+        high_rain_games = add_team_names_to_games(high_rain_games)
+    except Exception as e:
+        print(f"Error fetching weather data: {e}")
+        high_rain_games = pd.DataFrame()  # Empty DataFrame if error
     
     return render_template('index.html', 
                           active_page='home', 
@@ -147,9 +205,10 @@ def index():
                           default_stack_boost=STACK_BOOST,
                           default_energy_per_card=ENERGY_PER_CARD,
                           default_lineup_order=",".join(DEFAULT_LINEUP_ORDER),
-                          db_exists=db_exists )
+                          db_exists=db_exists,
+                          high_rain_games=high_rain_games)
 
-@app.route('/generate_lineup', methods=['POST'])
+@app.route('/generate', methods=['POST'])
 def generate_lineup():
     """Generate lineup based on form inputs and return HTML content"""
     # Get form data
@@ -220,34 +279,162 @@ def generate_lineup():
             energy_per_card=energy_per_card,
             ignore_list=ignore_list
         )
-              
-        # Generate lineups HTML
-        lineup_html = generate_lineups_html(
+        
+        # Calculate total energy used
+        total_energy_used = {"rare": 0, "limited": 0}
+        for lineup_type in Config.PRIORITY_ORDER:
+            data = lineups[lineup_type]
+            if data["cards"]:
+                total_energy_used["rare"] += data["energy_used"]["rare"]
+                total_energy_used["limited"] += data["energy_used"]["limited"]
+        
+        # Find players missing projections
+        merged = cards_df.merge(projections_df, left_on="name", right_on="player_name", how="left")
+        missing_projections = merged[merged["total_projection"].isna()]
+        missing_projections_list = []
+        
+        if not missing_projections.empty:
+            for _, row in missing_projections.iterrows():
+                missing_projections_list.append({"name": row['name'], "slug": row['slug']})
+        
+        # Fetch sealed cards data for the template
+        db_path = DATABASE_FILE
+        conn = sqlite3.connect(db_path)
+        
+        # Get current date and game week dates
+        current_date = datetime.now()
+        try:
+            current_game_week = determine_game_week()
+            # Parse the game week to get start and end dates
+            start_date_str, end_date_str = current_game_week.split("_to_")
+            start_date = datetime.strptime(start_date_str, "%Y-%m-%d")
+            end_date = datetime.strptime(end_date_str, "%Y-%m-%d")
+        except:
+            # Fallback to 7 days if game week format is unexpected
+            start_date = current_date
+            end_date = current_date + timedelta(days=7)
+        
+        # Part 1: Get sealed cards with projections
+        query = """
+        SELECT c.slug, c.name, c.year, c.rarity, c.positions, 
+               COUNT(ap.game_id) as game_count, 
+               SUM(ap.sorare_score) as total_projected_score,
+               AVG(ap.sorare_score) as avg_projected_score,
+               MIN(ap.game_date) as next_game_date
+        FROM cards c
+        JOIN AdjustedProjections ap ON c.name = ap.player_name
+        WHERE c.username = ? AND c.sealed = 1 AND ap.game_date >= ?
+        GROUP BY c.slug, c.name, c.year, c.rarity, c.positions
+        ORDER BY next_game_date ASC
+        """
+        
+        cursor = conn.cursor()
+        cursor.execute(query, (username, current_date.strftime('%Y-%m-%d')))
+        projection_results = cursor.fetchall()
+        
+        projections_df = None
+        if projection_results:
+            # Convert to DataFrame
+            columns = ['Slug', 'Name', 'Year', 'Rarity', 'Positions', 
+                      'Upcoming Games', 'Total Projected Score', 'Avg Score/Game', 'Next Game Date']
+            projections_df = pd.DataFrame(projection_results, columns=columns)
+            
+            # Format the dataframe - round the scores to 2 decimal places
+            projections_df['Total Projected Score'] = projections_df['Total Projected Score'].round(2)
+            projections_df['Avg Score/Game'] = projections_df['Avg Score/Game'].round(2)
+        
+        # Part 2: Get injured sealed cards
+        query = """
+        SELECT c.slug, c.name, c.year, c.rarity, c.positions, i.status, 
+               i.description, i.return_estimate, i.team
+        FROM cards c
+        JOIN injuries i ON c.name = i.player_name
+        WHERE c.username = ? AND c.sealed = 1 AND i.return_estimate IS NOT NULL
+        """
+        
+        cursor.execute(query, (username,))
+        injury_results = cursor.fetchall()
+        
+        injured_df = None
+        if injury_results:
+            # Filter injuries with return dates within game week
+            soon_returning = []
+            
+            for result in injury_results:
+                return_estimate = result[7]
+                
+                # Check if return_estimate contains a date string
+                try:
+                    # Try different date formats
+                    for date_format in ['%Y-%m-%d', '%m/%d/%Y', '%d-%m-%Y', '%d/%m/%Y']:
+                        try:
+                            return_date = datetime.strptime(return_estimate, date_format)
+                            if start_date <= return_date <= end_date:
+                                soon_returning.append(result)
+                            break
+                        except ValueError:
+                            continue
+                except:
+                    # If return_estimate isn't a date, check if it contains keywords
+                    # suggesting imminent return during the game week
+                    keywords = ['day to day', 'game time decision', 'probable', 
+                               'questionable', 'today', 'tomorrow', '1-3 days',
+                               'this week', 'expected back', 'returning']
+                    if any(keyword in return_estimate.lower() for keyword in keywords):
+                        soon_returning.append(result)
+            
+            if soon_returning:
+                columns = ['Slug', 'Name', 'Year', 'Rarity', 'Positions', 'Status', 
+                          'Description', 'Return Estimate', 'Team']
+                injured_df = pd.DataFrame(soon_returning, columns=columns)
+        
+        conn.close()
+        
+        # Render the template with all the necessary data
+        lineup_html = render_template(
+            'partials/lineup_results.html',
             lineups=lineups,
             energy_limits=energy_limits,
             username=username,
             boost_2025=boost_2025,
             stack_boost=stack_boost,
             energy_per_card=energy_per_card,
-            cards_df=cards_df,
-            projections_df=projections_df
+            game_week=determine_game_week(),
+            priority_order=Config.PRIORITY_ORDER,
+            lineup_slots=Config.LINEUP_SLOTS,
+            total_energy_used=total_energy_used,
+            missing_projections=missing_projections_list,
+            current_date=current_date,
+            start_date=start_date,
+            end_date=end_date,
+            projections_df=projections_df,
+            injured_df=injured_df
         )
         
         # Return success with HTML content
         return jsonify({
             'success': True,
             'lineup_html': lineup_html,
-            'ignored_games': len(ignore_game_ids)  # Adding info about ignored games
+            'ignored_games': len(ignore_game_ids)
         })
         
     except Exception as e:
         return jsonify({'error': f"Error generating lineup: {str(e)}"})
-    
+
 @app.route('/weather_report', methods=['GET'])
 def weather_report():
     """Generate weather report HTML that can be cached"""
     try:
-        weather_html = generate_weather_html()
+        # Use the same code from index route to get high rain games
+        high_rain_games = fetch_high_rain_games_details()
+        
+        # Format game dates and add team names
+        high_rain_games = format_game_dates(high_rain_games)
+        high_rain_games = add_team_names_to_games(high_rain_games)
+        
+        # Render the partial template directly
+        weather_html = render_template('partials/weather_report.html', high_rain_games=high_rain_games)
+        
         return jsonify({
             'success': True,
             'weather_html': weather_html

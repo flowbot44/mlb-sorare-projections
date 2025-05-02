@@ -1,0 +1,39 @@
+{% if high_rain_games is not defined or high_rain_games is none %}
+    <div class="d-flex justify-content-center">
+        <div class="spinner-border text-primary" role="status">
+            <span class="visually-hidden">Loading weather data...</span>
+        </div>
+    </div>
+{% elif high_rain_games.empty or high_rain_games|length == 0 %}
+    <div class='alert alert-info'>No games found with a high rain probability (>= 75%) in the forecast.</div>
+{% else %}
+    <div class='alert alert-warning'><strong>Found {{ high_rain_games|length }} game(s) with >= 75% rain probability</strong></div>
+    <p>These games <em>may</em> face delays or postponement:</p>
+    
+    <div class='table-responsive'>
+        <table class='table'>
+            <thead>
+                <tr>
+                    <th>Game</th>
+                    <th>Date</th>
+                    <th>Forecast</th>
+                    <th>Action</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for game in high_rain_games.itertuples() %}
+                <tr data-game-id="{{ game.game_id }}">
+                    <td>{{ game.away_team_name if 'away_team_name' in game._fields else game.away_team_id }} @ {{ game.home_team_name if 'home_team_name' in game._fields else game.home_team_id }}<br><small>{{ game.stadium_name if game.stadium_name is not none else "Unknown Stadium" }}</small></td>
+                    <td>{{ game.game_date_formatted if game.game_date_formatted is not none else "Date Unknown" }}</td>
+                    <td><span class="badge bg-danger">{{ game.rain|round(0)|int }}% Rain</span></td>
+                    <td>
+                        <button class="btn btn-sm btn-warning ignore-game-btn" data-game-id="{{ game.game_id }}">
+                            Ignore Game
+                        </button>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+{% endif %} 

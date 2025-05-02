@@ -1,0 +1,80 @@
+<!-- templates/partials/lineup_results.html -->
+<div class="lineup-container">
+    <h1>Lineups for Game Week {{ game_week }}</h1>
+    <div class="lineup-header">
+        <p><strong>Username:</strong> {{ username }}</p>
+        <p><strong>2025 Card Boost:</strong> {{ boost_2025 }}</p>
+        <p><strong>Stack Boost:</strong> {{ stack_boost }}</p>
+        <p><strong>Energy Per Non-2025 Card:</strong> {{ energy_per_card }}</p>
+    </div>
+            
+    <div class="lineups-section">
+        {% for lineup_type in priority_order %}
+            {% set data = lineups[lineup_type] %}
+            {% if data.cards %}
+                <div class="lineup-card">
+                    <h3>{{ lineup_type.replace('_', ' #') }}</h3>
+                    <p class="lineup-score">Projected Score: <strong>{{ data.projected_score }}</strong></p>
+                    <p class="energy-usage">Energy Used: <span class="rare-energy">Rare={{ data.energy_used.rare }}</span>, 
+                    <span class="limited-energy">Limited={{ data.energy_used.limited }}</span></p>
+                    <div class="lineup-cards">
+                        <h4>Cards:</h4>
+                        <table class="lineup-table">
+                            <thead>
+                                <tr>
+                                    <th>Position</th>
+                                    <th>Card</th>
+                                    <th>Projection</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {# First sort by lineup_slots order #}
+                                {% set sorted_indices = [] %}
+                                {% for slot in lineup_slots %}
+                                    {% for i in range(data.slot_assignments|length) %}
+                                        {% if data.slot_assignments[i] == slot %}
+                                            {% set _ = sorted_indices.append(i) %}
+                                        {% endif %}
+                                    {% endfor %}
+                                {% endfor %}
+                                
+                                {% for i in sorted_indices %}
+                                    <tr>
+                                        <td>{{ data.slot_assignments[i] }}</td>
+                                        <td>{{ data.cards[i] }}</td>
+                                        <td>{{ "%.2f"|format(data.projections[i]) }}</td>
+                                    </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            {% endif %}
+        {% endfor %}
+    </div>
+    
+    <div class="energy-summary">
+        <h2>Energy Summary</h2>
+        <p>Total Rare Energy Used: {{ total_energy_used.rare }}/{{ energy_limits.rare }} (Remaining: {{ energy_limits.rare - total_energy_used.rare }})</p>
+        <p>Total Limited Energy Used: {{ total_energy_used.limited }}/{{ energy_limits.limited }} (Remaining: {{ energy_limits.limited - total_energy_used.limited }})</p>
+    </div>
+
+    <div class="missing-projections">
+        <h2>PLAYERS LACKING PROJECTIONS</h2>
+        {% if missing_projections %}
+            <p>The following players lack projections:</p>
+            <ul>
+                {% for player in missing_projections %}
+                    <li>{{ player.name }} (slug: {{ player.slug }})</li>
+                {% endfor %}
+            </ul>
+        {% else %}
+            <p>All players have projections. Great!</p>
+        {% endif %}
+    </div>
+    
+    <div class="sealed-cards-report">
+        <h2>SEALED CARDS REPORT</h2>
+        {% include 'partials/sealed_cards_report.html' %}
+    </div>
+</div> 
