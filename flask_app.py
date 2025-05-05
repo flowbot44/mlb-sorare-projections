@@ -702,7 +702,7 @@ def show_projections(game_week_id=None):
         JOIN Teams ht ON g.home_team_id = ht.id
         JOIN Teams at ON g.away_team_id = at.id
         JOIN Stadiums s ON g.stadium_id = s.id
-        WHERE g.date BETWEEN ? AND ?
+        WHERE g.local_date BETWEEN ? AND ?
         ORDER BY g.date, g.time
     """, (start_date, end_date)).fetchall()
 
@@ -769,7 +769,7 @@ def show_projections(game_week_id=None):
         JOIN Teams ht ON g.home_team_id = ht.id
         JOIN Teams at ON g.away_team_id = at.id
         WHERE (g.home_probable_pitcher_id IS NULL OR g.away_probable_pitcher_id IS NULL)
-          AND g.date BETWEEN ? AND ?
+          AND g.local_date BETWEEN ? AND ?
         ORDER BY g.date, g.time
     """, (start_date, end_date)).fetchall()
     
