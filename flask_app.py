@@ -484,6 +484,23 @@ def download_lineup(username):
     else:
         return "Lineup file not found. Please generate it first.", 404
 
+def check_if_projections_exist(game_week_id):
+    """Check if projections already exist for a specific game week"""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        # Check if there are any AdjustedProjections for this game week
+        query = "SELECT COUNT(*) FROM AdjustedProjections WHERE game_week = ?"
+        result = cursor.execute(query, (game_week_id,)).fetchone()
+        conn.close()
+        
+        # If count is greater than 0, projections exist
+        return result[0] > 0
+    except Exception as e:
+        print(f"Error checking projections: {str(e)}")
+        return False
+
 @app.route('/update_data', methods=['POST'])
 def update_data():
     """Update injury data and projections"""
@@ -491,22 +508,33 @@ def update_data():
         # Check if database exists and create it if needed
         db_exists = check_and_create_db()
         
+        # Determine current game week
+        current_game_week = determine_game_week()
+        
         if not db_exists:
-            # Run full update to create and populate database
+            # Database doesn't exist, run full update
             success = run_full_update()
             if not success:
                 return jsonify({'error': "Failed to initialize database. Check logs for details."})
         else:
-            # Just update injury data and projections
-            injury_data = fetch_injury_data()
-            if injury_data:
-                update_database(injury_data)
+            # Check if projections exist for the current game week
+            projections_exist = check_if_projections_exist(current_game_week)
             
-            # Update projections
-            update_projections()
-        
-        # Get current game week after update
-        current_game_week = determine_game_week()
+            if not projections_exist:
+                # First time for this game week - run full update
+                print(f"No projections found for game week {current_game_week} - running full update")
+                success = run_full_update()
+                if not success:
+                    return jsonify({'error': "Failed to run full update. Check logs for details."})
+            else:
+                # Just update injury data and projections
+                print(f"Updating existing projections for game week {current_game_week}")
+                injury_data = fetch_injury_data()
+                if injury_data:
+                    update_database(injury_data)
+                
+                # Update projections
+                update_projections()
         
         return jsonify({
             'success': True,
@@ -569,6 +597,8 @@ def check_db():
             'tables': table_names,
             'game_week': game_week,
             'projection_count': proj_count,
+            'projections_exist': proj_count > 0,
+            'needs_full_update': proj_count == 0,
             'last_updated': db_modified
         })
     except Exception as e:

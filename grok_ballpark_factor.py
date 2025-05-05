@@ -28,7 +28,8 @@ def init_db():
     c.execute('''CREATE TABLE IF NOT EXISTS Games 
                  (id INTEGER PRIMARY KEY, date TEXT, time TEXT, stadium_id INTEGER, 
                   home_team_id INTEGER, away_team_id INTEGER,
-                  home_probable_pitcher_id TEXT, away_probable_pitcher_id TEXT, wind_effect_label TEXT)''')
+                  home_probable_pitcher_id TEXT, away_probable_pitcher_id TEXT, 
+                  wind_effect_label TEXT, local_date TEXT)''')
     c.execute('DROP TABLE IF EXISTS WeatherForecasts')
     c.execute('''CREATE TABLE IF NOT EXISTS WeatherForecasts 
                  (id INTEGER PRIMARY KEY AUTOINCREMENT, game_id INTEGER, 
@@ -64,8 +65,35 @@ def get_schedule(conn, start_date, end_date):
     for date_data in data.get('dates', []):
         for game in date_data.get('games', []):
             game_id = game['gamePk']
-            game_date = game['gameDate'].split('T')[0]
-            game_time = game['gameDate'].split('T')[1].split('.')[0]
+            
+            # Use officialDate as the local_date - this is MLB's official game date
+            # regardless of time zone or when the game actually starts in UTC
+            local_date = game['officialDate']
+            
+            # Split but preserve timezone information
+            game_date_str = game['gameDate']
+            date_parts = game_date_str.split('T')
+            game_date = date_parts[0]  # This is the UTC date
+            
+            # Keep the full time including timezone indicator if present
+            time_part = date_parts[1]
+            if '.' in time_part:  # Handle milliseconds
+                time_part = time_part.split('.')[0]
+            
+            # Check if timezone indicator exists and preserve it
+            if time_part.endswith('Z'):
+                game_time = time_part  # Keep the Z to indicate UTC
+            else:
+                # If no Z, but has timezone offset like +00:00
+                for tzchar in ['+', '-']:
+                    if tzchar in time_part:
+                        tz_parts = time_part.split(tzchar)
+                        game_time = f"{tz_parts[0]}Z"  # Simplify to UTC for storage
+                        break
+                else:
+                    # No timezone indicator found, assume UTC
+                    game_time = f"{time_part}Z"
+            
             stadium_id = game['venue']['id']
             home_team_id = game['teams']['home']['team']['id']
             away_team_id = game['teams']['away']['team']['id']
@@ -74,14 +102,17 @@ def get_schedule(conn, start_date, end_date):
             
             c.execute("INSERT OR IGNORE INTO Stadiums (id, name) VALUES (?, ?)",
                       (stadium_id, game['venue']['name']))
+            
+            # Updated to include local_date column
             c.execute("""
                 INSERT OR REPLACE INTO Games 
                 (id, date, time, stadium_id, home_team_id, away_team_id, 
-                 home_probable_pitcher_id, away_probable_pitcher_id) 
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                 home_probable_pitcher_id, away_probable_pitcher_id, local_date) 
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (game_id, game_date, game_time, stadium_id, home_team_id, away_team_id,
                   str(home_pitcher) if home_pitcher else None, 
-                  str(away_pitcher) if away_pitcher else None))
+                  str(away_pitcher) if away_pitcher else None,
+                  local_date))
     
     conn.commit()
     return game_week_id
@@ -132,22 +163,40 @@ def get_weather_nws(lat, lon, forecast_time):
             print(f"Invalid coordinates: lat={lat}, lon={lon}")
             return None
         
+        # Ensure the forecast_time has a timezone (should be UTC)
+        if forecast_time.tzinfo is None:
+            forecast_time = forecast_time.replace(tzinfo=pytz.utc)
+            
         # Define game duration (3 hours)
         game_end_time = forecast_time + timedelta(hours=3)
 
         points_url = f"https://api.weather.gov/points/{lat},{lon}"
-        points_response = requests.get(points_url)
-        points_response.raise_for_status()
-        points_data = points_response.json()
+        try:
+            points_response = requests.get(points_url)
+            points_response.raise_for_status()
+            points_data = points_response.json()
 
-        if 'properties' not in points_data or 'forecastHourly' not in points_data['properties']:
-            print(f"Invalid points data structure: {points_data}")
-            return None
+            if 'properties' not in points_data or 'forecastHourly' not in points_data['properties']:
+                print(f"Invalid points data structure: {points_data}")
+                return None
 
-        forecast_hourly_url = points_data['properties']['forecastHourly']
-        forecast_response = requests.get(forecast_hourly_url)
-        forecast_response.raise_for_status()
-        forecast_data = forecast_response.json()
+            forecast_hourly_url = points_data['properties']['forecastHourly']
+            forecast_response = requests.get(forecast_hourly_url)
+            forecast_response.raise_for_status()
+            forecast_data = forecast_response.json()
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 503 and "ForecastMissingData" in e.response.text:
+                # Handle missing forecast data specifically
+                error_details = e.response.json() if e.response.text else {"detail": "Unknown error"}
+                print(f"NWS API missing forecast data: {error_details.get('detail', 'No details provided')}")
+                print(f"This is normal for dates far in the future or certain regions.")
+                return {
+                    'temp': 70,  # Default temperature
+                    'wind_speed': 5,  # Light wind
+                    'wind_dir': 0,  # North
+                    'rain': 0,  # No rain
+                }
+            raise  # Re-raise for other HTTP errors
 
         if 'properties' not in forecast_data or 'periods' not in forecast_data['properties']:
             print(f"Invalid forecast data structure: {forecast_data}")
@@ -162,6 +211,7 @@ def get_weather_nws(lat, lon, forecast_time):
         relevant_forecasts = []
         for period in periods:
             try:
+                # Parse times from API ensuring proper timezone handling
                 start_time = datetime.fromisoformat(period['startTime'].replace('Z', '+00:00'))
                 end_time = datetime.fromisoformat(period['endTime'].replace('Z', '+00:00'))
                 
@@ -222,6 +272,8 @@ def get_weather_nws(lat, lon, forecast_time):
         
     except requests.exceptions.RequestException as e:
         print(f"NWS API Request Error: {e}")
+        if hasattr(e, 'response') and e.response is not None:
+            print(f"Response content: {e.response.text[:500]}")  # Print first 500 chars of response
         return None
     except Exception as e:
         print(f"Unexpected error in get_weather_nws: {e}")
@@ -239,9 +291,15 @@ def fetch_weather_and_store(conn, start_date, end_date):
         conn.commit()
         print("Added timestamp column to WeatherForecasts table")
     
-    games = c.execute("SELECT id, date, time, stadium_id FROM Games WHERE date BETWEEN ? AND ?",
-                      (start_date, end_date)).fetchall()
+    # Use local_date for filtering instead of date
+    games = c.execute("""
+        SELECT id, date, time, stadium_id FROM Games 
+        WHERE local_date BETWEEN ? AND ?
+    """, (start_date, end_date)).fetchall()
     
+    print(f"Found {len(games)} games for weather processing between {start_date} and {end_date}")
+    
+    # Always use pytz.utc for current_time to ensure proper timezone handling
     current_time = datetime.now(pytz.utc)
     skipped_past_games = 0
     updated_forecasts = 0
@@ -265,6 +323,7 @@ def fetch_weather_and_store(conn, start_date, end_date):
             # Check if the timestamp is within our cache window
             if weather_data[4]:  # If timestamp exists
                 try:
+                    # Parse timestamp and ensure it has UTC timezone
                     last_update = datetime.strptime(weather_data[4], "%Y-%m-%d %H:%M:%S").replace(tzinfo=pytz.utc)
                     time_diff = current_time - last_update
                     
@@ -287,14 +346,21 @@ def fetch_weather_and_store(conn, start_date, end_date):
             continue
 
         # Parse game time to UTC
-        if time.endswith('Z'):
-            utc_time = datetime.strptime(f"{date}T{time}".replace('Z', ''), "%Y-%m-%dT%H:%M:%S")
-            utc_time = utc_time.replace(tzinfo=pytz.utc)
-        else:
-            local_tz = pytz.timezone('America/New_York')
-            local_time = datetime.strptime(f"{date}T{time}", "%Y-%m-%dT%H:%M:%S")
-            local_time = local_tz.localize(local_time)
-            utc_time = local_time.astimezone(pytz.utc)
+        # We should now expect times to have the Z indicator since we preserved it in get_schedule
+        try:
+            if time.endswith('Z'):
+                # Time already has UTC indicator
+                utc_time = datetime.fromisoformat(f"{date}T{time[:-1]}+00:00")
+            else:
+                # Fallback for any times without Z - assume Eastern Time as before
+                local_tz = pytz.timezone('America/New_York')
+                local_time = datetime.strptime(f"{date}T{time}", "%Y-%m-%dT%H:%M:%S")
+                local_time = local_tz.localize(local_time, is_dst=None)  # Handle DST properly
+                utc_time = local_time.astimezone(pytz.utc)
+                print(f"Warning: Game {game_id} has no timezone indicator. Assuming Eastern Time.")
+        except ValueError as e:
+            print(f"Error parsing time for game {game_id}: {e}")
+            continue
 
         # Skip games that have already started or occurred in the past
         if utc_time <= current_time:
@@ -311,6 +377,7 @@ def fetch_weather_and_store(conn, start_date, end_date):
         weather = get_weather_nws(lat, lon, utc_time)
         if weather is not None:
             wind_effect_label = get_wind_effect_label(orientation, weather['wind_dir'])
+            # Format current_time as string for database storage
             timestamp = current_time.strftime("%Y-%m-%d %H:%M:%S")
             
             if needs_update and weather_data:
@@ -417,7 +484,10 @@ def adjust_score_for_injury(base_score, injury_status, return_estimate, game_dat
         return_estimate_date = None
     else:
         try:
+            # Ensure game_date and return_estimate_date are date objects for comparison
             return_estimate_date = datetime.strptime(return_estimate, '%Y-%m-%d').date()
+            if isinstance(game_date, datetime):
+                game_date = game_date.date()
         except ValueError:
             print(f"Warning: Invalid return date format '{return_estimate}', treating as None")
             return_estimate_date = None
@@ -440,8 +510,11 @@ def adjust_stats(stats, park_factors, is_dome, orientation, wind_dir, wind_speed
     return adjusted_stats
 
 def process_hitter(conn, game_data, hitter_data, injuries, game_week_id):
-    game_id, game_date, time, stadium_id, home_team_id, away_team_id = game_data[:6]
-    game_date_obj = datetime.strptime(game_date, '%Y-%m-%d').date()
+    # Unpack game_data with local_date
+    game_id, game_date, time, stadium_id, home_team_id, away_team_id, local_date = game_data
+    
+    # Use local_date instead of game_date for game date object
+    game_date_obj = datetime.strptime(local_date, '%Y-%m-%d').date()
 
     player_name = normalize_name(hitter_data.get("Name"))
     mlbam_id = hitter_data.get("MLBAMID")
@@ -512,21 +585,24 @@ def process_hitter(conn, game_data, hitter_data, injuries, game_week_id):
     if existing:
         c.execute("""
             UPDATE AdjustedProjections 
-            SET sorare_score = ? 
+            SET sorare_score = ?, game_date = ?
             WHERE (player_name = ? AND game_id = ? AND team_id = ?) OR
                 (mlbam_id = ? AND game_id = ?)
-        """, (final_score, player_name, game_id, player_team_id, mlbam_id, game_id))
+        """, (final_score, local_date, player_name, game_id, player_team_id, mlbam_id, game_id))
     else:
         c.execute("""
             INSERT INTO AdjustedProjections 
             (player_name, mlbam_id, game_id, game_date, sorare_score, game_week, team_id) 
             VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, (player_name, mlbam_id, game_id, game_date, final_score, game_week_id, player_team_id))
+        """, (player_name, mlbam_id, game_id, local_date, final_score, game_week_id, player_team_id))
 
 
 def process_pitcher(conn, game_data, pitcher_data, injuries, game_week_id, is_starter=False):
-    game_id, game_date, time, stadium_id, home_team_id, away_team_id = game_data[:6]
-    game_date_obj = datetime.strptime(game_date, '%Y-%m-%d').date()
+    # Unpack game_data with local_date
+    game_id, game_date, time, stadium_id, home_team_id, away_team_id, local_date = game_data
+    
+    # Use local_date instead of game_date for game date object
+    game_date_obj = datetime.strptime(local_date, '%Y-%m-%d').date()
 
     player_name = normalize_name(pitcher_data.get("Name"))
     mlbam_id = pitcher_data.get("MLBAMID")
@@ -570,16 +646,16 @@ def process_pitcher(conn, game_data, pitcher_data, injuries, game_week_id, is_st
         if existing:
             c.execute("""
                 UPDATE AdjustedProjections 
-                SET sorare_score = ? 
+                SET sorare_score = ?, game_date = ?
                 WHERE (player_name = ? AND game_id = ? AND team_id = ?) OR
                     (mlbam_id = ? AND game_id = ?)
-            """, (final_score, player_name, game_id, player_team_id, mlbam_id, game_id))
+            """, (final_score, local_date, player_name, game_id, player_team_id, mlbam_id, game_id))
         else:
             c.execute("""
                 INSERT INTO AdjustedProjections 
                 (player_name, mlbam_id, game_id, game_date, sorare_score, game_week, team_id) 
                 VALUES (?, ?, ?, ?, ?, ?, ?)
-            """, (player_name, mlbam_id, game_id, game_date, final_score, game_week_id, player_team_id))
+            """, (player_name, mlbam_id, game_id, local_date, final_score, game_week_id, player_team_id))
         return
     
     c = conn.cursor()
@@ -631,22 +707,20 @@ def process_pitcher(conn, game_data, pitcher_data, injuries, game_week_id, is_st
         WHERE (player_name = ? AND game_id = ? AND team_id = ?) OR
             (mlbam_id = ? AND game_id = ?)
     """, (player_name, game_id, player_team_id, mlbam_id, game_id)).fetchone()
-    
-
 
     if existing:
         c.execute("""
             UPDATE AdjustedProjections 
-            SET sorare_score = ? 
+            SET sorare_score = ?, game_date = ?
             WHERE (player_name = ? AND game_id = ? AND team_id = ?) OR
                 (mlbam_id = ? AND game_id = ?)
-        """, (final_score, player_name, game_id, player_team_id, mlbam_id, game_id))
+        """, (final_score, local_date, player_name, game_id, player_team_id, mlbam_id, game_id))
     else:
         c.execute("""
             INSERT INTO AdjustedProjections 
             (player_name, mlbam_id, game_id, game_date, sorare_score, game_week, team_id) 
             VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, (player_name, mlbam_id, game_id, game_date, final_score, game_week_id, player_team_id))
+        """, (player_name, mlbam_id, game_id, local_date, final_score, game_week_id, player_team_id))
 
 def add_projected_starting_pitchers(conn, start_date, end_date):
     """
@@ -767,14 +841,18 @@ def calculate_adjustments(conn, start_date, end_date, game_week_id):
             unique_key = f"{player_name}_{team_id}"
             injuries[unique_key] = injury_data
     
+    # Use local_date for filtering instead of date
     games = c.execute("""
-        SELECT id, date, time, stadium_id, home_team_id, away_team_id, home_probable_pitcher_id, away_probable_pitcher_id 
-        FROM Games WHERE date BETWEEN ? AND ?
+        SELECT id, date, time, stadium_id, home_team_id, away_team_id, 
+               home_probable_pitcher_id, away_probable_pitcher_id, local_date
+        FROM Games WHERE local_date BETWEEN ? AND ?
     """, (start_date, end_date)).fetchall()
+    
+    print(f"Found {len(games)} games for projection processing between {start_date} and {end_date}")
     
     # First, lookup the names of the probable pitchers
     for i, game in enumerate(games):
-        game_id, game_date, time, stadium_id, home_team_id, away_team_id, home_pitcher_id, away_pitcher_id = game
+        game_id, game_date, time, stadium_id, home_team_id, away_team_id, home_pitcher_id, away_pitcher_id, local_date = game
         
         # Get pitcher names if IDs exist
         home_pitcher_name = None
@@ -803,10 +881,10 @@ def calculate_adjustments(conn, start_date, end_date, game_week_id):
     
     # Process hitters for each game
     for game in games:
-        game_id, game_date, time, stadium_id, home_team_id, away_team_id, home_pitcher_id, away_pitcher_id, home_pitcher_name, away_pitcher_name = game
+        game_id, game_date, time, stadium_id, home_team_id, away_team_id, home_pitcher_id, away_pitcher_id, local_date, home_pitcher_name, away_pitcher_name = game
         
-        # Pass first 6 elements of game tuple (includes team IDs)
-        game_data = game[:6]
+        # Pass first 6 elements of game tuple (includes team IDs) plus local_date
+        game_data = game[:6] + (local_date,)
         
         # Process home team hitters
         home_hitters = c.execute("""
@@ -870,9 +948,17 @@ def calculate_adjustments(conn, start_date, end_date, game_week_id):
             process_pitcher(conn, game_data, pitcher_dict, injuries, game_week_id, is_starter=is_starter)
     
     conn.commit()
+
 # --- Main Function ---
 def main(update_rosters=False, specified_date=None):
-    current_date = specified_date if specified_date else datetime.now().date()
+    # If no date is specified, use the current date in local timezone
+    if specified_date is None:
+        # Get current date in local timezone rather than UTC to ensure
+        # correct determination of game week
+        current_date = datetime.now().date()
+    else:
+        current_date = specified_date
+        
     game_week_id = determine_game_week(current_date)  # Use the utils function
     start_date, end_date = game_week_id.split('_to_')  # Split the string for use
     print(f"Processing game week: {start_date} to {end_date}")

@@ -131,12 +131,23 @@ document.addEventListener('DOMContentLoaded', function () {
                 const dbInitContainer = document.getElementById('dbInitContainer');
 
                 if (data.status === 'connected') {
-                    statusDiv.className = 'db-status alert alert-success';
-                    statusDiv.innerHTML = `
-                        <strong>Database Connected:</strong> 
-                        Game Week: ${data.game_week} | 
-                        <small><strong>Last Updated:</strong> ${data.last_updated}</small>
-                    `;
+                    if (data.projections_exist) {
+                        // Database connected and projections exist for current game week
+                        statusDiv.className = 'db-status alert alert-success';
+                        statusDiv.innerHTML = `
+                            <strong>Database Connected:</strong> 
+                            Game Week: ${data.game_week} | 
+                            <small><strong>Last Updated:</strong> ${data.last_updated}</small>
+                        `;
+                    } else {
+                        // Database connected but no projections for current game week
+                        statusDiv.className = 'db-status alert alert-warning';
+                        statusDiv.innerHTML = `
+                            <strong>New Game Week Detected:</strong> 
+                            Game Week: ${data.game_week} | 
+                            <small>No projections for this week yet. Update required.</small>
+                        `;
+                    }
                     generateBtn.disabled = false;
                     dbInitContainer.style.display = 'none';
                 } else if (data.status === 'missing') {

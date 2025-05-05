@@ -1,6 +1,11 @@
 import sqlite3
 import unittest
 from datetime import datetime
+import sys
+import os
+
+# Add the parent directory to the path so we can import grok_ballpark_factor
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from grok_ballpark_factor import process_hitter, process_pitcher
 
 class TestProcessHitter(unittest.TestCase):
@@ -68,7 +73,7 @@ class TestProcessHitter(unittest.TestCase):
         self.cursor.execute("INSERT INTO ParkFactors (stadium_id, factor_type, value) VALUES (1, 'HR', 100)")
 
         # Mock inputs
-        game_data = (1, '2023-10-01', '19:00', 1, 1, 2)
+        game_data = (1, '2023-10-01', '19:00', 1, 1, 2, '2023-10-01')
         hitter_data = {
             "Name": "John Doe",
             "MLBAMID": "12345",
@@ -100,7 +105,7 @@ class TestProcessHitter(unittest.TestCase):
 
     def test_process_hitter_skips_no_team(self):
         # Mock inputs
-        game_data = (1, '2023-10-01', '19:00', 1, 1, 2)
+        game_data = (1, '2023-10-01', '19:00', 1, 1, 2, '2023-10-01')
         hitter_data = {
             "Name": "John Doe",
             "MLBAMID": "12345",
@@ -128,7 +133,7 @@ class TestProcessHitter(unittest.TestCase):
         """)
 
         # Mock inputs
-        game_data = (1, '2023-10-01', '19:00', 1, 1, 2)
+        game_data = (1, '2023-10-01', '19:00', 1, 1, 2, '2023-10-01')
         hitter_data = {
             "Name": "John Doe",
             "MLBAMID": "12345",
@@ -162,7 +167,7 @@ class TestProcessHitter(unittest.TestCase):
         self.cursor.execute("INSERT INTO ParkFactors (stadium_id, factor_type, value) VALUES (1, 'HR', 100)")
 
         # Mock inputs
-        game_data = (1, '2023-10-01', '19:00', 1, 1, 2)
+        game_data = (1, '2023-10-01', '19:00', 1, 1, 2, '2023-10-01')
         hitter_data = {
             "Name": "John Doe",
             "MLBAMID": "12345",
@@ -211,7 +216,7 @@ class TestProcessHitter(unittest.TestCase):
         self.cursor.execute("INSERT INTO ParkFactors (stadium_id, factor_type, value) VALUES (1, 'K', 100)")
 
         # Mock inputs
-        game_data = (1, '2023-10-01', '19:00', 1, 1, 2)
+        game_data = (1, '2023-10-01', '19:00', 1, 1, 2, '2023-10-01')
         pitcher_data = {
             "Name": "Jane Doe",
             "MLBAMID": "54321",
@@ -259,7 +264,7 @@ class TestProcessHitter(unittest.TestCase):
         self.cursor.execute("INSERT INTO ParkFactors (stadium_id, factor_type, value) VALUES (1, 'K', 100)")
 
         # Mock inputs
-        game_data = (1, '2023-10-01', '19:00', 1, 1, 2)
+        game_data = (1, '2023-10-01', '19:00', 1, 1, 2, '2023-10-01')
         pitcher_data = {
             "Name": "Jane Doe",
             "MLBAMID": "54321",
