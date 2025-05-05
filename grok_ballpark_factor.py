@@ -5,6 +5,7 @@ import pandas as pd
 from datetime import datetime, timedelta, date
 import pytz
 from utils import normalize_name, determine_game_week, DATABASE_FILE
+import math
 
 
 SCORING_MATRIX = {
@@ -31,7 +32,7 @@ def init_db():
     c.execute('DROP TABLE IF EXISTS WeatherForecasts')
     c.execute('''CREATE TABLE IF NOT EXISTS WeatherForecasts 
                  (id INTEGER PRIMARY KEY AUTOINCREMENT, game_id INTEGER, 
-                  wind_dir REAL, wind_speed REAL, temp REAL, rain REAL)''')
+                  wind_dir REAL, wind_speed REAL, temp REAL, rain REAL, timestamp TEXT)''')
     c.execute('DROP TABLE IF EXISTS AdjustedProjections')
     c.execute('''CREATE TABLE IF NOT EXISTS AdjustedProjections 
                 (id INTEGER PRIMARY KEY AUTOINCREMENT, player_name TEXT, mlbam_id TEXT,
@@ -122,12 +123,17 @@ def populate_player_teams(conn, start_date, end_date, update_rosters=False):
 
 # --- Weather Functions ---
 def get_weather_nws(lat, lon, forecast_time):
-    """Fetches weather data from the National Weather Service API with enhanced error handling."""
+    """
+    Fetches weather data from the National Weather Service API, averaging conditions over a 3-hour game period.
+    Returns average wind, temperature and precipitation probability for the entire game duration.
+    """
     try:
         if not (-90 <= lat <= 90 and -180 <= lon <= 180):
             print(f"Invalid coordinates: lat={lat}, lon={lon}")
             return None
         
+        # Define game duration (3 hours)
+        game_end_time = forecast_time + timedelta(hours=3)
 
         points_url = f"https://api.weather.gov/points/{lat},{lon}"
         points_response = requests.get(points_url)
@@ -152,24 +158,68 @@ def get_weather_nws(lat, lon, forecast_time):
             print("No forecast periods available.")
             return None
 
+        # Collect all forecasts within the game time window
+        relevant_forecasts = []
         for period in periods:
             try:
                 start_time = datetime.fromisoformat(period['startTime'].replace('Z', '+00:00'))
                 end_time = datetime.fromisoformat(period['endTime'].replace('Z', '+00:00'))
-                if start_time <= forecast_time < end_time:
-                    weather = {
-                        'temp': period['temperature'],
-                        'wind_speed': int(period['windSpeed'].split()[0]),
-                        'wind_dir': wind_dir_to_degrees(period['windDirection']),
+                
+                # Check if this period overlaps with the game time
+                if (start_time <= game_end_time and end_time >= forecast_time):
+                    # Calculate the overlap duration for weighted averaging
+                    overlap_start = max(start_time, forecast_time)
+                    overlap_end = min(end_time, game_end_time)
+                    overlap_hours = (overlap_end - overlap_start).total_seconds() / 3600
+                    
+                    try:
+                        wind_speed = int(period['windSpeed'].split()[0])
+                    except (ValueError, IndexError, KeyError):
+                        wind_speed = 0
+                        
+                    forecast = {
+                        'temp': period.get('temperature', 70),
+                        'wind_speed': wind_speed,
+                        'wind_dir': wind_dir_to_degrees(period.get('windDirection', 'N')),
                         'rain': period.get('probabilityOfPrecipitation', {}).get('value', 0),
+                        'weight': overlap_hours  # Weight by hours of overlap
                     }
-                    return weather
+                    relevant_forecasts.append(forecast)
             except (KeyError, ValueError) as e:
                 print(f"Error parsing period times: {e} in period: {period}")
                 continue
 
-        print(f"No forecast period found for {forecast_time}")
-        return None
+        if not relevant_forecasts:
+            print(f"No forecast periods found overlapping with game time {forecast_time} to {game_end_time}")
+            return None
+            
+        # Calculate weighted averages
+        total_weight = sum(f['weight'] for f in relevant_forecasts)
+        if total_weight == 0:
+            return None
+            
+        avg_temp = sum(f['temp'] * f['weight'] for f in relevant_forecasts) / total_weight
+        avg_rain = sum(f['rain'] * f['weight'] for f in relevant_forecasts) / total_weight
+        
+        # For wind speed and direction, we need to handle vector averaging
+        # Convert to vectors and then back to speed/direction
+        wind_x = sum(f['wind_speed'] * math.cos(math.radians(f['wind_dir'])) * f['weight'] for f in relevant_forecasts) / total_weight
+        wind_y = sum(f['wind_speed'] * math.sin(math.radians(f['wind_dir'])) * f['weight'] for f in relevant_forecasts) / total_weight
+        
+        avg_wind_speed = math.sqrt(wind_x**2 + wind_y**2)
+        avg_wind_dir = math.degrees(math.atan2(wind_y, wind_x)) % 360
+        
+        # Construct and return the averaged weather data
+        weather = {
+            'temp': round(avg_temp),
+            'wind_speed': round(avg_wind_speed),
+            'wind_dir': round(avg_wind_dir),
+            'rain': round(avg_rain),
+        }
+        
+        print(f"Game at {forecast_time.strftime('%Y-%m-%d %H:%M')}: Averaged weather over {len(relevant_forecasts)} periods ({total_weight:.1f} hours)")
+        return weather
+        
     except requests.exceptions.RequestException as e:
         print(f"NWS API Request Error: {e}")
         return None
@@ -179,19 +229,64 @@ def get_weather_nws(lat, lon, forecast_time):
 
 def fetch_weather_and_store(conn, start_date, end_date):
     c = conn.cursor()
+    
+    # First, modify the WeatherForecasts table if needed to include a timestamp column
+    try:
+        c.execute("SELECT timestamp FROM WeatherForecasts LIMIT 1")
+    except sqlite3.OperationalError:
+        # The timestamp column doesn't exist, so add it
+        c.execute("ALTER TABLE WeatherForecasts ADD COLUMN timestamp TEXT")
+        conn.commit()
+        print("Added timestamp column to WeatherForecasts table")
+    
     games = c.execute("SELECT id, date, time, stadium_id FROM Games WHERE date BETWEEN ? AND ?",
                       (start_date, end_date)).fetchall()
+    
+    current_time = datetime.now(pytz.utc)
+    skipped_past_games = 0
+    updated_forecasts = 0
+    
+    # Cache timeout in hours
+    cache_timeout_hours = 1
 
     for game in games:
         game_id, date, time, stadium_id = game
+        
+        # Check if this game already has weather data and when it was last updated
+        weather_data = c.execute("""
+            SELECT wind_dir, wind_speed, temp, rain, timestamp 
+            FROM WeatherForecasts 
+            WHERE game_id = ?
+        """, (game_id,)).fetchone()
+        
+        needs_update = True
+        
+        if weather_data:
+            # Check if the timestamp is within our cache window
+            if weather_data[4]:  # If timestamp exists
+                try:
+                    last_update = datetime.strptime(weather_data[4], "%Y-%m-%d %H:%M:%S").replace(tzinfo=pytz.utc)
+                    time_diff = current_time - last_update
+                    
+                    if time_diff.total_seconds() < cache_timeout_hours * 3600:
+                        needs_update = False
+                        continue  # Skip this game, forecast is recent enough
+                    else:
+                        print(f"Weather forecast for game {game_id} is {time_diff.total_seconds() / 3600:.1f} hours old, refreshing...")
+                except (ValueError, TypeError):
+                    # If timestamp is invalid, update the forecast
+                    print(f"Invalid timestamp for game {game_id}, refreshing forecast...")
+        
         stadium = c.execute("SELECT lat, lon, is_dome, orientation FROM Stadiums WHERE id = ?", (stadium_id,)).fetchone()
-        if not stadium or stadium[2]:
+        if not stadium or stadium[2]:  # Skip if dome or no stadium data
             continue
+            
         lat, lon, is_dome, orientation = stadium
         if lat is None or lon is None:
             print(f"Skipping game https://baseballsavant.mlb.com/preview?game_pk={game_id} due to missing stadium {stadium_id} coordinates.")
             continue
 
+        # Parse game time to UTC
         if time.endswith('Z'):
             utc_time = datetime.strptime(f"{date}T{time}".replace('Z', ''), "%Y-%m-%dT%H:%M:%S")
             utc_time = utc_time.replace(tzinfo=pytz.utc)
@@ -201,21 +296,51 @@ def fetch_weather_and_store(conn, start_date, end_date):
             local_time = local_tz.localize(local_time)
             utc_time = local_time.astimezone(pytz.utc)
 
-        if utc_time > datetime.now(pytz.utc) + timedelta(days=7):
-            print(f"⚠️ Skipping forecast too far in the future: {utc_time} game id {game_id}")
+        # Skip games that have already started or occurred in the past
+        if utc_time <= current_time:
+            skipped_past_games += 1
+            print(f"⚠️ Skipping forecast for game {game_id} that has already started or occurred ({utc_time.strftime('%Y-%m-%d %H:%M:%S')})")
+            continue
+            
+        # Skip games too far in the future (> 7 days)
+        if utc_time > current_time + timedelta(days=7):
+            print(f"⚠️ Skipping forecast too far in the future: {utc_time.strftime('%Y-%m-%d %H:%M:%S')} game id {game_id}")
             continue
 
+        # Get and store the weather forecast
         weather = get_weather_nws(lat, lon, utc_time)
-        wind_effect_label = get_wind_effect_label(orientation, weather['wind_dir'])
         if weather is not None:
-            c.execute("INSERT INTO WeatherForecasts (game_id, wind_dir, wind_speed, temp, rain) VALUES (?, ?, ?, ?, ?)",
-                      (game_id, weather['wind_dir'], weather['wind_speed'], weather['temp'], weather['rain']))
+            wind_effect_label = get_wind_effect_label(orientation, weather['wind_dir'])
+            timestamp = current_time.strftime("%Y-%m-%d %H:%M:%S")
+            
+            if needs_update and weather_data:
+                # Update existing forecast
+                c.execute("""
+                    UPDATE WeatherForecasts 
+                    SET wind_dir = ?, wind_speed = ?, temp = ?, rain = ?, timestamp = ?
+                    WHERE game_id = ?
+                """, (weather['wind_dir'], weather['wind_speed'], weather['temp'], 
+                     weather['rain'], timestamp, game_id))
+                updated_forecasts += 1
+            else:
+                # Insert new forecast
+                c.execute("""
+                    INSERT INTO WeatherForecasts 
+                    (game_id, wind_dir, wind_speed, temp, rain, timestamp) 
+                    VALUES (?, ?, ?, ?, ?, ?)
+                """, (game_id, weather['wind_dir'], weather['wind_speed'], 
+                     weather['temp'], weather['rain'], timestamp))
+            
             c.execute("""
-                    UPDATE Games SET wind_effect_label = ? WHERE id = ?
-                """, (wind_effect_label, game_id))
+                UPDATE Games SET wind_effect_label = ? WHERE id = ?
+            """, (wind_effect_label, game_id))
         else:
             print(f"Skipping game {game_id} due to API error.")
 
+    if skipped_past_games > 0:
+        print(f"Skipped weather lookup for {skipped_past_games} past games")
+    if updated_forecasts > 0:
+        print(f"Updated {updated_forecasts} weather forecasts that were older than {cache_timeout_hours} hour(s)")
     conn.commit()
 
 # --- Adjustment Functions ---
