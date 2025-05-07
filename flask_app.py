@@ -22,13 +22,18 @@ from injury_updates import fetch_injury_data, update_database
 from grok_ballpark_factor import (
     main as update_projections, 
     determine_game_week,
-    get_wind_effect_label,
-    get_wind_effect,
-    get_temp_adjustment,
-    fetch_weather_and_store,
-    get_schedule
+    get_schedule,
+    fetch_weather_and_store
 )
-from utils import DATABASE_FILE
+from utils import (
+    DATABASE_FILE, 
+    get_wind_effect, 
+    get_wind_effect_label, 
+    get_temp_adjustment,
+    calculate_hr_factors,
+    get_weather_summary,
+    get_top_hr_players
+)
 import logging
 
 # Initialize Flask app
@@ -695,7 +700,7 @@ def show_projections(game_week_id=None):
     
     # Get all games in the date range
     games = c.execute("""
-        SELECT g.id, g.date, g.time, g.home_team_id, g.away_team_id, 
+        SELECT g.id, g.date, g.time, g.stadium_id, g.home_team_id, g.away_team_id, 
                ht.name AS home_team_name, at.name AS away_team_name,
                s.name AS stadium_name, g.wind_effect_label
         FROM Games g
@@ -752,11 +757,23 @@ def show_projections(game_week_id=None):
             WHERE game_id = ?
         """, (game_id,)).fetchone()
         
+        # Get park factors by stadium name
+        stadium_id = game['stadium_id']
+        park_factors = c.execute("""
+            SELECT factor_type, value 
+            FROM ParkFactors 
+            WHERE stadium_id = ?
+        """, (stadium_id,)).fetchall()
+        
+        # Convert park factors to dictionary
+        park_factors_dict = {row[0]: row[1] / 100 for row in park_factors}
+        
         game_projections[game_id] = {
             'game_info': game,
             'home_players': home_players,
             'away_players': away_players,
-            'weather': weather
+            'weather': weather,
+            'park_factors': park_factors_dict
         }
     
     # Query for games missing probable pitchers
@@ -894,17 +911,6 @@ def get_game_weather_data(specified_date=None):
     ]
     games_df = pd.DataFrame(games, columns=columns)
     
-    # Get park factors
-    park_factors = {}
-    for stadium_id in games_df['stadium_id'].unique():
-        factors = c.execute("SELECT factor_type, value FROM ParkFactors WHERE stadium_id = ?", 
-                          (stadium_id,)).fetchall()
-        if factors:
-            park_factors[stadium_id] = {row[0]: row[1] / 100 for row in factors}
-        else:
-            # Default park factors if none exist
-            park_factors[stadium_id] = {'HR': 1.0, 'R': 1.0, '1B': 1.0, '2B': 1.0, '3B': 1.0}
-    
     # Process each game's weather and calculate HR factors
     game_data = []
     hr_odds_rankings = []
@@ -930,86 +936,31 @@ def get_game_weather_data(specified_date=None):
         else:
             game_info['time'] = datetime.strptime(game_time, "%H:%M:%S").strftime("%I:%M %p ET")
         
-        # Calculate HR factors
-        hr_factor = 1.0
-        hr_details = []
+        # Calculate HR factors using the utility function
+        hr_factors = calculate_hr_factors(
+            conn, 
+            game['stadium_name'],
+            bool(game['is_dome']),
+            game['orientation'],
+            game['wind_dir'],
+            game['wind_speed'],
+            game['temp']
+        )
         
-        # Get ballpark HR factor
-        stadium_id = game['stadium_id']
-        if stadium_id in park_factors and 'HR' in park_factors[stadium_id]:
-            park_hr_factor = park_factors[stadium_id]['HR']
-            hr_factor *= park_hr_factor
-            hr_details.append({
-                'type': 'park',
-                'effect': park_hr_factor,
-                'description': f"{'Increases' if park_hr_factor > 1 else 'Decreases'} HR by {abs(park_hr_factor - 1) * 100:.1f}%"
-            })
-        
-        # Add weather factors if not a dome
-        if not game['is_dome'] and not pd.isna(game['temp']) and not pd.isna(game['wind_speed']):
-            # Temperature effect
-            temp_effect = get_temp_adjustment(game['temp'])
-            if temp_effect != 1.0:
-                hr_factor *= temp_effect
-                hr_details.append({
-                    'type': 'temperature',
-                    'value': game['temp'],
-                    'effect': temp_effect,
-                    'description': f"{'Hot' if temp_effect > 1 else 'Cold'} temperature ({int(game['temp'])}°F) {'increases' if temp_effect > 1 else 'decreases'} HR by {abs(temp_effect - 1) * 100:.1f}%"
-                })
-            
-            # Wind effect
-            if not pd.isna(game['orientation']) and not pd.isna(game['wind_dir']):
-                wind_effect = get_wind_effect(game['orientation'], game['wind_dir'], game['wind_speed'])
-                if wind_effect != 1.0:
-                    hr_factor *= wind_effect
-                    wind_type = "Outward" if wind_effect > 1 else "Inward"
-                    hr_details.append({
-                        'type': 'wind',
-                        'value': game['wind_speed'],
-                        'direction': game['wind_effect_label'],
-                        'effect': wind_effect,
-                        'description': f"{wind_type} wind ({int(game['wind_speed'])} mph) {'increases' if wind_effect > 1 else 'decreases'} HR by {abs(wind_effect - 1) * 100:.1f}%"
-                    })
-            
-            # Rain risk (doesn't directly affect HR but useful info)
-            if not pd.isna(game['rain']) and game['rain'] > 30:
-                hr_details.append({
-                    'type': 'rain',
-                    'value': game['rain'],
-                    'effect': 1.0,  # Doesn't affect HR calculation
-                    'description': f"Precipitation risk: {int(game['rain'])}%"
-                })
+        # Add HR factor details to the game info
+        game_info['hr_factor'] = hr_factors['hr_factor']
+        game_info['park_hr_factor'] = hr_factors['park_hr_factor']
+        game_info['hr_details'] = hr_factors['details']
+        game_info['hr_classification'] = hr_factors['classification']
+        game_info['hr_class_color'] = hr_factors['class_color']
         
         # Summarize weather conditions
-        if game['is_dome']:
-            game_info['weather_summary'] = "Dome stadium (weather not a factor)"
-        elif pd.isna(game['temp']) or pd.isna(game['wind_speed']):
-            game_info['weather_summary'] = "Weather data unavailable"
-        else:
-            temp_desc = "hot" if game['temp'] > 80 else "cold" if game['temp'] < 60 else "mild"
-            wind_desc = f"{int(game['wind_speed'])} mph {game['wind_effect_label'] or 'neutral'}"
-            game_info['weather_summary'] = f"{int(game['temp'])}°F ({temp_desc}), {wind_desc}"
-        
-        # Overall HR factor and classification
-        game_info['hr_factor'] = hr_factor
-        game_info['hr_details'] = hr_details
-        
-        if hr_factor >= 1.15:
-            game_info['hr_classification'] = "Excellent"
-            game_info['hr_class_color'] = "success"
-        elif hr_factor >= 1.05:
-            game_info['hr_classification'] = "Good"
-            game_info['hr_class_color'] = "primary"
-        elif hr_factor >= 0.95:
-            game_info['hr_classification'] = "Neutral"
-            game_info['hr_class_color'] = "secondary"
-        elif hr_factor >= 0.85:
-            game_info['hr_classification'] = "Poor"
-            game_info['hr_class_color'] = "warning"
-        else:
-            game_info['hr_classification'] = "Very Poor"
-            game_info['hr_class_color'] = "danger"
+        game_info['weather_summary'] = get_weather_summary(
+            bool(game['is_dome']),
+            game['temp'],
+            game['wind_speed'],
+            game['wind_effect_label']
+        )
         
         # Add to game data list
         game_data.append(game_info)
@@ -1021,7 +972,8 @@ def get_game_weather_data(specified_date=None):
             'abbrev': game_info['home_abbrev'],
             'opponent': game_info['away_team'],
             'is_home': True,
-            'hr_factor': hr_factor,
+            'hr_factor': hr_factors['hr_factor'],
+            'park_hr_factor': hr_factors['park_hr_factor'],
             'stadium': game_info['stadium_name'],
             'time': game_info['time']
         })
@@ -1032,7 +984,8 @@ def get_game_weather_data(specified_date=None):
             'abbrev': game_info['away_abbrev'],
             'opponent': game_info['home_team'],
             'is_home': False,
-            'hr_factor': hr_factor,
+            'hr_factor': hr_factors['hr_factor'],
+            'park_hr_factor': hr_factors['park_hr_factor'],
             'stadium': game_info['stadium_name'],
             'time': game_info['time']
         })
@@ -1051,77 +1004,6 @@ def get_game_weather_data(specified_date=None):
         "hr_rankings": hr_odds_rankings,
         "hr_players": hr_players
     }
-
-def get_top_hr_players(conn, game_date, team_rankings, limit=25):
-    """Get the top players most likely to hit HRs based on individual stats and game factors"""
-    player_data = []
-    c = conn.cursor()
-    
-    # Get mapping from team name to mlb team ID
-    team_id_map = {}
-    teams = c.execute("SELECT id, name FROM Teams").fetchall()
-    for team_id, team_name in teams:
-        team_id_map[team_name] = team_id
-    
-    # Query player projections - focusing on home run hitters
-    for team_rank in team_rankings:
-        team_name = team_rank['team']
-        if team_name not in team_id_map:
-            continue
-            
-        team_id = team_id_map[team_name]
-        hr_factor = team_rank['hr_factor']
-        
-        # Get players on this team with their projected stats
-        query = """
-        SELECT 
-            h.Name, 
-            p.mlbam_id,
-            h.HR_per_game
-        FROM 
-            hitters_per_game h
-        JOIN
-            PlayerTeams p ON h.MLBAMID = p.mlbam_id
-        WHERE 
-            p.team_id = ? AND
-            h.HR_per_game > 0
-        ORDER BY
-            h.HR_per_game DESC
-        """
-        
-        player_results = c.execute(query, (team_id,)).fetchall()
-        
-        for player in player_results:
-            name, mlbam_id, hr_per_game = player
-            
-            # Apply the game's HR factor to the player's HR rate
-            adjusted_hr_per_game = hr_per_game * hr_factor
-            
-            # Calculate HR probability for this game
-            hr_odds = 1 - (1 - adjusted_hr_per_game) ** 1  # Probability of at least 1 HR
-            
-            # Add player to the list
-            player_data.append({
-                'name': name,
-                'mlbam_id': mlbam_id,
-                'team': team_name,
-                'team_abbrev': team_rank['abbrev'],
-                'opponent': team_rank['opponent'],
-                'is_home': team_rank['is_home'],
-                'game_id': team_rank['game_id'],
-                'stadium': team_rank['stadium'],
-                'game_time': team_rank['time'],
-                'hr_per_game': hr_per_game,
-                'adjusted_hr_per_game': adjusted_hr_per_game,
-                'hr_odds_pct': hr_odds * 100,  # Convert to percentage
-                'game_hr_factor': hr_factor
-            })
-    
-    # Sort by adjusted HR probability
-    sorted_players = sorted(player_data, key=lambda x: x['hr_odds_pct'], reverse=True)
-    
-    # Return top N players
-    return sorted_players[:limit]
 
 @app.route('/hr-odds')
 @app.route('/hr-odds/<date_str>')
