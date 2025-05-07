@@ -4,7 +4,15 @@ import requests
 import pandas as pd
 from datetime import datetime, timedelta, date
 import pytz
-from utils import normalize_name, determine_game_week, DATABASE_FILE
+from utils import (
+    normalize_name, 
+    determine_game_week, 
+    DATABASE_FILE,
+    get_wind_effect,
+    get_wind_effect_label,
+    get_temp_adjustment,
+    wind_dir_to_degrees
+)
 import math
 
 
@@ -267,7 +275,6 @@ def get_weather_nws(lat, lon, forecast_time):
             'rain': round(avg_rain),
         }
         
-        print(f"Game at {forecast_time.strftime('%Y-%m-%d %H:%M')}: Averaged weather over {len(relevant_forecasts)} periods ({total_weight:.1f} hours)")
         return weather
         
     except requests.exceptions.RequestException as e:
@@ -411,43 +418,16 @@ def fetch_weather_and_store(conn, start_date, end_date):
     conn.commit()
 
 # --- Adjustment Functions ---
-def get_wind_effect(orientation, wind_dir, wind_speed):
-    angle_diff = (wind_dir - orientation + 180) % 360 - 180
-    if abs(angle_diff) < 45 and wind_speed > 10:
-        return 0.9
-    elif abs(angle_diff) > 135 and wind_speed > 10:
-        return 1.1
-    return 1.0
-
-def get_wind_effect_label(orientation, wind_dir):
-    """
-    Determines the wind effect label ("Out", "In", "Cross") based on the stadium's orientation and wind direction.
-    """
-    if orientation is None or wind_dir is None:
-        return "Neutral"
-
-    angle_diff = (wind_dir - orientation + 180) % 360 - 180
-    if abs(angle_diff) < 45:
-        return "In"
-    elif abs(angle_diff) > 135:
-        return "Out"
-    else:
-        return "Cross"
-
-def get_temp_adjustment(temp):
-    if temp > 80:
-        return 1.05
-    elif temp < 60:
-        return 0.95
-    return 1.0
-
-def wind_dir_to_degrees(wind_dir):
-    directions = {
-        'N': 0, 'NNE': 22.5, 'NE': 45, 'ENE': 67.5, 'E': 90, 'ESE': 112.5,
-        'SE': 135, 'SSE': 157.5, 'S': 180, 'SSW': 202.5, 'SW': 225, 'WSW': 247.5,
-        'W': 270, 'WNW': 292.5, 'NW': 315, 'NNW': 337.5
-    }
-    return directions.get(wind_dir.upper() if wind_dir else 'N', 0)
+def adjust_stats(stats, park_factors, is_dome, orientation, wind_dir, wind_speed, temp, is_pitcher=False):
+    """Apply park and weather adjustments to player stats."""
+    adjusted_stats = {}
+    for stat, value in stats.items():
+        park_adjustment = (1 / park_factors.get(stat, 1.0) if is_pitcher and stat in ['H', 'ER', 'BB', 'HR']
+                           else park_factors.get(stat, 1.0))
+        weather_factor = (1.0 if is_dome or stat != 'HR' 
+                          else get_wind_effect(orientation or 0, wind_dir or 0, wind_speed or 0) * get_temp_adjustment(temp or 70))
+        adjusted_stats[stat] = value * park_adjustment * weather_factor
+    return adjusted_stats
 
 def calculate_sorare_hitter_score(stats, scoring_matrix):
     score = 0
@@ -498,17 +478,6 @@ def adjust_score_for_injury(base_score, injury_status, return_estimate, game_dat
         return base_score * DAY_TO_DAY_REDUCTION
     return base_score
 
-def adjust_stats(stats, park_factors, is_dome, orientation, wind_dir, wind_speed, temp, is_pitcher=False):
-    """Apply park and weather adjustments to player stats."""
-    adjusted_stats = {}
-    for stat, value in stats.items():
-        park_adjustment = (1 / park_factors.get(stat, 1.0) if is_pitcher and stat in ['H', 'ER', 'BB', 'HR']
-                           else park_factors.get(stat, 1.0))
-        weather_factor = (1.0 if is_dome or stat != 'HR' 
-                          else get_wind_effect(orientation or 0, wind_dir or 0, wind_speed or 0) * get_temp_adjustment(temp or 70))
-        adjusted_stats[stat] = value * park_adjustment * weather_factor
-    return adjusted_stats
-
 def process_hitter(conn, game_data, hitter_data, injuries, game_week_id):
     # Unpack game_data with local_date
     game_id, game_date, time, stadium_id, home_team_id, away_team_id, local_date = game_data
@@ -554,7 +523,9 @@ def process_hitter(conn, game_data, hitter_data, injuries, game_week_id):
         is_dome, orientation, wind_dir, wind_speed, temp = stadium_data
 
     park_factors = {row[0]: row[1] / 100 for row in c.execute("SELECT factor_type, value FROM ParkFactors WHERE stadium_id = ?", (stadium_id,)).fetchall()}
+    
     if not park_factors:
+        print(f"park not found {stadium_id}")
         park_factors = {'R': 1.0, 'RBI': 1.0, '1B': 1.0, '2B': 1.0, '3B': 1.0, 'HR': 1.0, 'BB': 1.0, 'K': 1.0, 'SB': 1.0, 'CS': 1.0, 'HBP': 1.0}
 
     base_stats = {
