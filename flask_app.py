@@ -116,6 +116,9 @@ def check_and_create_db():
 def run_full_update():
     """Run all update scripts to refresh the database"""
     try:
+
+        create_teams_table()
+
         # Step 1: Run fangraph_fetcher to download CSVs
         print("Running fangraph_fetcher.py...")
         subprocess.run(["python3", os.path.join(script_dir, "fangraph_fetcher.py")], check=True)
@@ -891,7 +894,7 @@ def get_game_weather_data(specified_date=None):
     LEFT JOIN 
         WeatherForecasts w ON g.id = w.game_id
     WHERE 
-        g.date = ?
+        g.local_date = ?
     ORDER BY 
         g.time
     """
