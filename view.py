@@ -45,7 +45,7 @@ def get_all_games():
 def get_all_projections():
     conn = sqlite3.connect(db_path)  # Create/connect to the database file
  
-    cursor = conn.execute("SELECT * FROM AdjustedProjections WHERE player_name IN ('TEOSCAR HERNANDEZ', 'EMILIO PAGAN')")
+    cursor = conn.execute("SELECT * FROM AdjustedProjections WHERE player_name IN ('ROB REFSNYDER')")
 
     #cursor = conn.execute("PRAGMA table_info(pitchers_per_game)")
     #cursor = conn.execute('SELECT `1B_per_game`, "2B_per_game", "3B_per_game" FROM hitters_per_game WHERE name IN ("KYLE TUCKER")')

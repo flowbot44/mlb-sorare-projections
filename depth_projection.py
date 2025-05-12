@@ -134,14 +134,19 @@ try:
             return row[col_map[col_name]]
         return 0  # Default to 0 if column not found
 
+    # Find the maximum projected games from the dataset to use as baseline
+    max_projected_games = hitters['G'].max()
+    print(f"Using {max_projected_games} games as baseline (maximum projected games in dataset)")
+
     # Define proration function for hitters (per game)
     def prorate_hitter(row):
-        """Prorate hitter stats on a per-game basis."""
-        games = safe_get_col(row, 'G')
+        """Prorate hitter stats on a per-game basis using maximum projected games as baseline."""
+        actual_games = safe_get_col(row, 'G')
         
         result = {
             hitter_name_col: row[hitter_name_col],
-            'G': games
+            'G': actual_games,  # Keep track of actual projected games
+            'max_games': max_projected_games  # Store the baseline for reference
         }
         
         # Try to get MLBAMID if available
@@ -152,19 +157,23 @@ try:
         else:
             result['MLBAMID'] = 0  # Default if missing
         
-        if games == 0:
-            # Set all stats to 0 if games is 0
+        if actual_games == 0:
+            # Set all stats to 0 if actual games is 0
             for stat in ['R', 'RBI', '1B', '2B', '3B', 'HR', 'BB', 'SO', 'SB', 'CS', 'HBP']:
                 result[f'{stat}_per_game'] = 0.0
         else:
-            # Calculate per game stats
+            # Calculate per game stats using max_projected_games
             for stat in ['R', 'RBI', '1B', '2B', '3B', 'HR', 'BB', 'SO', 'SB', 'CS', 'HBP']:
                 value = safe_get_col(row, stat, hitter_col_map)
-                # Map 'SO' in data to 'K' in desired output if needed
+                # First get the full projection by extrapolating from actual games to max games
+                # Then get the per-game value based on max games
                 if stat == 'SO':
-                    result['K_per_game'] = value / games
+                    result['K_per_game'] = value / max_projected_games
                 else:
-                    result[f'{stat}_per_game'] = value / games
+                    result[f'{stat}_per_game'] = value / max_projected_games
+            
+            # Add a field to show what percentage of remaining games the player is projected to play
+            result['projected_playing_time_pct'] = (actual_games / max_projected_games) * 100
         
         return pd.Series(result)
 

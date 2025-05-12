@@ -138,7 +138,7 @@ def populate_player_teams(conn, start_date, end_date, update_rosters=False):
     c.execute("DELETE FROM PlayerTeams")
     
     teams = set()
-    games = c.execute("SELECT home_team_id, away_team_id FROM Games WHERE date BETWEEN ? AND ?",
+    games = c.execute("SELECT home_team_id, away_team_id FROM Games WHERE local_date BETWEEN ? AND ?",
                       (start_date, end_date)).fetchall()
     for home_team_id, away_team_id in games:
         teams.add(home_team_id)
@@ -704,7 +704,7 @@ def add_projected_starting_pitchers(conn, start_date, end_date):
     # Get games in the date range
     games = c.execute("""
         SELECT id, date, home_team_id, away_team_id, home_probable_pitcher_id, away_probable_pitcher_id 
-        FROM Games WHERE date BETWEEN ? AND ?
+        FROM Games WHERE local_date BETWEEN ? AND ?
     """, (start_date, end_date)).fetchall()
     
     pitcher_count = 0
