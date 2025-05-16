@@ -480,7 +480,7 @@ def adjust_score_for_injury(base_score, injury_status, return_estimate, game_dat
 
 def process_hitter(conn, game_data, hitter_data, injuries, game_week_id):
     # Unpack game_data with local_date
-    game_id, game_date, time, stadium_id, home_team_id, away_team_id, home_starter, away_starter, wind_dir_str, local_date = game_data
+    game_id, game_date, time, stadium_id, home_team_id, away_team_id, local_date = game_data
     
     # Use local_date instead of game_date for game date object
     game_date_obj = datetime.strptime(local_date, '%Y-%m-%d').date()
@@ -548,9 +548,6 @@ def process_hitter(conn, game_data, hitter_data, injuries, game_week_id):
     injury_data = injuries.get(unique_player_key, injuries.get(player_name, {'status': 'Active', 'return_estimate': None}))    
     final_score = adjust_score_for_injury(fip_adjusted_score, injury_data['status'], injury_data['return_estimate'], game_date_obj)
 
-    if player_name == "TREA TURNER":
-        print(f"Player {player_name} base score {base_score} fip_adjusted_score {fip_adjusted_score} final score  {final_score}")
-
     existing = c.execute("""
         SELECT id FROM AdjustedProjections 
         WHERE (player_name = ? AND game_id = ? AND team_id = ?) OR
@@ -574,7 +571,7 @@ def process_hitter(conn, game_data, hitter_data, injuries, game_week_id):
 
 def process_pitcher(conn, game_data, pitcher_data, injuries, game_week_id, is_starter=False):
     # Unpack game_data with local_date
-    game_id, game_date, time, stadium_id, home_team_id, away_team_id, home_starter, away_starter, wind_dir_str, local_date = game_data
+    game_id, game_date, time, stadium_id, home_team_id, away_team_id, local_date = game_data
     
     # Use local_date instead of game_date for game date object
     game_date_obj = datetime.strptime(local_date, '%Y-%m-%d').date()

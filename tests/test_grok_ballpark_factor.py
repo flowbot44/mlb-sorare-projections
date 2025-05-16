@@ -88,7 +88,7 @@ class TestProcessHitter(unittest.TestCase):
         self.cursor.execute("INSERT INTO Games (id, home_team_id, away_team_id, home_probable_pitcher_id, away_probable_pitcher_id) VALUES (1, 1, 2, 1, 2)")
 
         # Mock inputs
-        game_data = (1, '2023-10-01', '19:00', 1, 1, 2, 1, 2, 'Out', '2023-10-01')  # Updated to match new game_data format
+        game_data = (1, '2023-10-01', '19:00', 1, 1, 2, '2023-10-01')  # Updated to match new game_data format
         hitter_data = {
             "Name": "John Doe",
             "MLBAMID": "12345",
@@ -134,7 +134,7 @@ class TestProcessHitter(unittest.TestCase):
 
      
      
-        game_data = (1, '2023-10-01', '19:00', 1, 1, 2, 1, 2, 'Out', '2023-10-01')  # Updated
+        game_data = (1, '2023-10-01', '19:00', 1, 1, 2, '2023-10-01')  # Updated
         hitter_data = {
             "Name": "John Doe",
             "MLBAMID": "12345",
@@ -173,7 +173,7 @@ class TestProcessHitter(unittest.TestCase):
         self.cursor.execute("INSERT INTO Games (id, home_team_id, away_team_id, home_probable_pitcher_id, away_probable_pitcher_id) VALUES (1, 1, 2, 1, 2)")
 
      
-        game_data = (1, '2023-10-01', '19:00', 1, 1, 2, 1, 2, 'Out', '2023-10-01') 
+        game_data = (1, '2023-10-01', '19:00', 1, 1, 2, '2023-10-01') 
         hitter_data = {
             "Name": "John Doe",
             "MLBAMID": "12345",
@@ -224,7 +224,7 @@ class TestProcessHitter(unittest.TestCase):
         self.cursor.execute("INSERT INTO Games (id, home_team_id, away_team_id, home_probable_pitcher_id, away_probable_pitcher_id) VALUES (1, 1, 2, 1, 2)")
 
         # Mock inputs - Updated to match new game_data format
-        game_data = (1, '2023-10-01', '19:00', 1, 1, 2, 1, 2, 'Out', '2023-10-01')
+        game_data = (1, '2023-10-01', '19:00', 1, 1, 2, '2023-10-01')
         pitcher_data = {
             "Name": "Jane Doe",
             "MLBAMID": "54321",
@@ -272,7 +272,7 @@ class TestProcessHitter(unittest.TestCase):
         self.cursor.execute("INSERT INTO Games (id, home_team_id, away_team_id, home_probable_pitcher_id, away_probable_pitcher_id) VALUES (1, 1, 2, 1, 2)")
         
         # Mock inputs - Updated to match new game_data format
-        game_data = (1, '2023-10-01', '19:00', 1, 1, 2, 1, 2, 'Out', '2023-10-01')
+        game_data = (1, '2023-10-01', '19:00', 1, 1, 2, '2023-10-01')
         pitcher_data = {
             "Name": "Jane Doe",
             "MLBAMID": "54321",
