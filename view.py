@@ -10,9 +10,8 @@ def get_cards_with_injuries():
     cursor = conn.cursor()
     
     query = """
-        SELECT distinct status  
-        FROM cards c
-        INNER JOIN injuries i ON c.name = i.player_name
+        SELECT player_name, status  
+        FROM injuries i WHERE i.player_name = 'ONEIL CRUZ'
     """
     cursor.execute(query)
     results = cursor.fetchall()
@@ -45,19 +44,24 @@ def get_all_games():
 def get_all_projections():
     conn = sqlite3.connect(db_path)  # Create/connect to the database file
  
-    cursor = conn.execute("SELECT * FROM AdjustedProjections WHERE player_name IN ('ROB REFSNYDER')")
+    cursor = conn.execute("SELECT * FROM AdjustedProjections WHERE player_name IN ('TREA TURNER')")
 
-    #cursor = conn.execute("PRAGMA table_info(pitchers_per_game)")
-    #cursor = conn.execute('SELECT `1B_per_game`, "2B_per_game", "3B_per_game" FROM hitters_per_game WHERE name IN ("KYLE TUCKER")')
-
-    #cursor = conn.execute("SELECT HLD_per_game, IP_per_game, H_per_game, ER_per_game, BB_per_game, HBP_per_game, W_per_game, K_per_game FROM pitchers_per_game WHERE name IN ('PAUL SEWALD','TANNER BIBEE')")
-
+    
     for row in cursor:
         print(row) #This will print tuples of the rows in the db.
     
     conn.close()
 
-
+def get_all_stats():
+    conn = sqlite3.connect(db_path)  # Create/connect to the database file
+    #cursor = conn.execute("PRAGMA table_info(pitchers_full_season)")
+    #cursor = conn.execute('SELECT `1B_per_game`, "2B_per_game", "3B_per_game" FROM hitters_per_game WHERE name IN ("KYLE TUCKER")')
+    cursor = conn.execute("SELECT name, fip FROM pitchers_full_season WHERE name IN ('TYLOR MEGILL', 'GRIFFIN CANNING', 'DAVID PETERSON')")
+    #cursor = conn.execute("SELECT HLD_per_game, IP_per_game, H_per_game, ER_per_game, BB_per_game, HBP_per_game, W_per_game, K_per_game FROM pitchers_per_game WHERE name IN ('PAUL SEWALD','TANNER BIBEE')")
+    for row in cursor:
+        print(row) #This will print tuples of the rows in the db.
+    
+    conn.close()
 
 def get_all_teams():
     conn = sqlite3.connect(db_path)  # Create/connect to the database file
@@ -91,10 +95,11 @@ def get_best_players():
 def main():
     #get_all_players()
     #get_cards_with_injuries()
+    #get_all_stats()
     get_all_projections()
     #get_all_teams()
     #get_best_players()
-    get_all_games()
+    #get_all_games()
 
 if __name__ == "__main__":
     main()
