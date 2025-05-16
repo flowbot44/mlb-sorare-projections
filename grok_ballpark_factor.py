@@ -20,9 +20,9 @@ SCORING_MATRIX = {
     'hitting': {'R': 3, 'RBI': 3, '1B': 2, '2B': 5, '3B': 8, 'HR': 10, 'BB': 2, 'K': -1, 'SB': 5, 'CS': -1, 'HBP': 2},
     'pitching': {'IP': 3, 'K': 2, 'H': -0.5, 'ER': -2, 'BB': -1, 'HBP': -1, 'W': 5, 'RA': 5, 'S': 10, 'HLD': 5 }
 }
-INJURY_STATUSES_OUT = ('Out', '15-Day-IL', '60-Day-IL')
+INJURY_STATUSES_OUT = ('Out', '10-Day-IL', '15-Day-IL', '60-Day-IL','suspension')
 DAY_TO_DAY_STATUS = 'Day-To-Day'
-DAY_TO_DAY_REDUCTION = 0.8
+DAY_TO_DAY_REDUCTION = 0.5
 
 # --- Database Initialization ---
 def init_db():
@@ -480,7 +480,7 @@ def adjust_score_for_injury(base_score, injury_status, return_estimate, game_dat
 
 def process_hitter(conn, game_data, hitter_data, injuries, game_week_id):
     # Unpack game_data with local_date
-    game_id, game_date, time, stadium_id, home_team_id, away_team_id, local_date = game_data
+    game_id, game_date, time, stadium_id, home_team_id, away_team_id, home_starter, away_starter, wind_dir_str, local_date = game_data
     
     # Use local_date instead of game_date for game date object
     game_date_obj = datetime.strptime(local_date, '%Y-%m-%d').date()
@@ -544,8 +544,12 @@ def process_hitter(conn, game_data, hitter_data, injuries, game_week_id):
 
     adjusted_stats = adjust_stats(base_stats, park_factors, is_dome, orientation, wind_dir, wind_speed, temp)
     base_score = calculate_sorare_hitter_score(adjusted_stats, SCORING_MATRIX)
-    injury_data = injuries.get(unique_player_key, injuries.get(player_name, {'status': 'Active', 'return_estimate': None}))
-    final_score = adjust_score_for_injury(base_score, injury_data['status'], injury_data['return_estimate'], game_date_obj)
+    fip_adjusted_score = apply_fip_adjustment(conn, game_id, player_team_id, base_score)
+    injury_data = injuries.get(unique_player_key, injuries.get(player_name, {'status': 'Active', 'return_estimate': None}))    
+    final_score = adjust_score_for_injury(fip_adjusted_score, injury_data['status'], injury_data['return_estimate'], game_date_obj)
+
+    if player_name == "TREA TURNER":
+        print(f"Player {player_name} base score {base_score} fip_adjusted_score {fip_adjusted_score} final score  {final_score}")
 
     existing = c.execute("""
         SELECT id FROM AdjustedProjections 
@@ -570,7 +574,7 @@ def process_hitter(conn, game_data, hitter_data, injuries, game_week_id):
 
 def process_pitcher(conn, game_data, pitcher_data, injuries, game_week_id, is_starter=False):
     # Unpack game_data with local_date
-    game_id, game_date, time, stadium_id, home_team_id, away_team_id, local_date = game_data
+    game_id, game_date, time, stadium_id, home_team_id, away_team_id, home_starter, away_starter, wind_dir_str, local_date = game_data
     
     # Use local_date instead of game_date for game date object
     game_date_obj = datetime.strptime(local_date, '%Y-%m-%d').date()
@@ -945,6 +949,65 @@ def main(update_rosters=False, specified_date=None):
 
 if __name__ == "__main__":
     main()
-    # Examples:
-    #main(update_rosters=True)
-    # main(specified_date=date(2025, 3, 27))
+
+
+def apply_fip_adjustment(conn, game_id, hitter_team_id, base_score):
+    """
+    Applies a FIP adjustment to a base score based on the opposing pitcher's FIP.
+
+    Args:
+        conn (sqlite3.Connection): The database connection.
+        game_id (int): The ID of the game.
+        hitter_team_id (int): The ID of the hitting team.
+        base_score (float): The base score to adjust.
+
+    Returns:
+        float: The adjusted score.
+    """
+    c = conn.cursor()
+    # Identify opposing pitcher MLBAMID
+    result = c.execute(
+        "SELECT home_team_id, away_team_id, home_probable_pitcher_id, away_probable_pitcher_id FROM Games WHERE id = ?",
+        (game_id,)
+    ).fetchone()
+
+    if not result:
+        return base_score
+
+    home_team_id, away_team_id, home_pitcher_id, away_pitcher_id = result
+     # Determine which pitcher the hitter faces
+    if hitter_team_id == home_team_id:
+        opposing_pitcher_id = away_pitcher_id
+    elif hitter_team_id == away_team_id:
+        opposing_pitcher_id = home_pitcher_id
+    else:
+        return base_score  # Team mismatch
+
+    if opposing_pitcher_id is None:
+        return base_score  # No probable pitcher
+
+    result = c.execute("SELECT fip FROM pitchers_full_season WHERE MLBAMID = ?", (str(opposing_pitcher_id),)).fetchone()
+
+    if not result:
+        return base_score  # No FIP available
+    
+    fip = result[0]
+    if fip < 3.20:
+        multiplier = 0.80
+    elif fip < 3.50:
+        multiplier = 0.90
+    elif fip < 3.80:
+        multiplier = 0.95
+    elif fip < 4.20:
+        multiplier = 1.00
+    elif fip < 4.40:
+        multiplier = 1.05
+    elif fip < 4.70:
+        multiplier = 1.10
+    elif fip < 5.00:
+        multiplier = 1.15
+    else:
+        multiplier = 1.20
+
+    return base_score * multiplier
+
