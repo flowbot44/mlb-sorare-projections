@@ -11,7 +11,8 @@ from utils import (
     get_wind_effect,
     get_wind_effect_label,
     get_temp_adjustment,
-    wind_dir_to_degrees
+    wind_dir_to_degrees,
+    get_platoon_start_side_by_mlbamid
 )
 import math
 
@@ -50,6 +51,15 @@ def init_db():
     c.execute('''CREATE TABLE IF NOT EXISTS PlayerTeams 
              (id INTEGER PRIMARY KEY AUTOINCREMENT, player_id TEXT, 
               player_name TEXT, team_id INTEGER, mlbam_id TEXT)''')
+        # Create new table for player handedness
+    c.execute('''CREATE TABLE IF NOT EXISTS PlayerHandedness 
+                 (id INTEGER PRIMARY KEY AUTOINCREMENT, 
+                  player_id TEXT, 
+                  mlbam_id TEXT,
+                  player_name TEXT, 
+                  bats TEXT, 
+                  throws TEXT,
+                  last_updated TEXT)''')
     
     conn.commit()
     return conn
@@ -144,16 +154,46 @@ def populate_player_teams(conn, start_date, end_date, update_rosters=False):
         teams.add(home_team_id)
         teams.add(away_team_id)
     
+    current_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    
     for team_id in teams:
-        url = f"https://statsapi.mlb.com/api/v1/teams/{team_id}/roster?rosterType=active"
+        # Use hydrate=person to get detailed player information including handedness
+        url = f"https://statsapi.mlb.com/api/v1/teams/{team_id}/roster?rosterType=active&hydrate=person"
         try:
             response = requests.get(url)
             roster_data = response.json()
             for player in roster_data.get('roster', []):
                 player_id = str(player['person']['id'])  # This is the MLBAMID
                 player_name = normalize_name(player['person']['fullName'])
+                
+                # Insert into PlayerTeams table
                 c.execute("INSERT OR IGNORE INTO PlayerTeams (player_id, player_name, team_id, mlbam_id) VALUES (?, ?, ?, ?)",
-                        (player_id, player_name, team_id, player_id))  # Store MLBAMID
+                        (player_id, player_name, team_id, player_id))
+                
+                # Extract handedness data
+                if 'person' in player:
+                    person_data = player['person']
+                    bats = person_data.get('batSide', {}).get('code', 'Unknown')
+                    throws = person_data.get('pitchHand', {}).get('code', 'Unknown')
+                    
+                    # Check if player already exists in handedness table
+                    existing = c.execute("SELECT id FROM PlayerHandedness WHERE mlbam_id = ?", 
+                                        (player_id,)).fetchone()
+                    
+                    if existing:
+                        # Update existing record
+                        c.execute("""
+                            UPDATE PlayerHandedness 
+                            SET bats = ?, throws = ?, last_updated = ?
+                            WHERE mlbam_id = ?
+                        """, (bats, throws, current_date, player_id))
+                    else:
+                        # Insert new record
+                        c.execute("""
+                            INSERT INTO PlayerHandedness 
+                            (player_id, mlbam_id, player_name, bats, throws, last_updated)
+                            VALUES (?, ?, ?, ?, ?, ?)
+                        """, (player_id, player_id, player_name, bats, throws, current_date))
         except Exception as e:
             print(f"Error fetching roster for team {team_id}: {e}")
     
@@ -501,7 +541,7 @@ def process_hitter(conn, game_data, hitter_data, injuries, game_week_id):
             player_team_id = team_result[0]
     
     if not player_team_id:
-        #print(f"⚠️ Skipping {player_name} — no team assigned.")
+        #print(f"â� ï¸� Skipping {player_name} â�� no team assigned.")
         return
     if player_team_id not in (home_team_id, away_team_id):
         return
@@ -528,25 +568,89 @@ def process_hitter(conn, game_data, hitter_data, injuries, game_week_id):
         print(f"park not found {stadium_id}")
         park_factors = {'R': 1.0, 'RBI': 1.0, '1B': 1.0, '2B': 1.0, '3B': 1.0, 'HR': 1.0, 'BB': 1.0, 'K': 1.0, 'SB': 1.0, 'CS': 1.0, 'HBP': 1.0}
 
+    # --- NEW: Determine opposing pitcher and their handedness ---
+    # Get game information to find opposing pitcher
+    game_info = c.execute("""
+        SELECT home_probable_pitcher_id, away_probable_pitcher_id
+        FROM Games WHERE id = ?
+    """, (game_id,)).fetchone()
+
+    opposing_pitcher_id = None
+    if game_info:
+        home_pitcher_id, away_pitcher_id = game_info
+        opposing_pitcher_id = away_pitcher_id if player_team_id == home_team_id else home_pitcher_id
+
+    pitcher_handedness = None
+    if opposing_pitcher_id:
+        pitcher_handedness_data = get_player_handedness(conn, mlbam_id=opposing_pitcher_id)
+        pitcher_handedness = pitcher_handedness_data.get('throws', 'Unknown')
+
+    platoon_matchup = get_platoon_start_side_by_mlbamid(mlbam_id=mlbam_id)
+
+    # --- NEW: Select appropriate hitter stats table based on pitcher handedness ---
     base_stats = {
-        'R': hitter_data.get('R_per_game', 0),
-        'RBI': hitter_data.get('RBI_per_game', 0),
-        '1B': hitter_data.get('1B_per_game', 0),
-        '2B': hitter_data.get('2B_per_game', 0),
-        '3B': hitter_data.get('3B_per_game', 0),
-        'HR': hitter_data.get('HR_per_game', 0),
-        'BB': hitter_data.get('BB_per_game', 0),
-        'K': hitter_data.get('K_per_game', 0),
-        'SB': hitter_data.get('SB_per_game', 0),
-        'CS': hitter_data.get('CS_per_game', 0),
-        'HBP': hitter_data.get('HBP_per_game', 0)
+        'R': 0, 'RBI': 0, '1B': 0, '2B': 0, '3B': 0, 'HR': 0,
+        'BB': 0, 'K': 0, 'SB': 0, 'CS': 0, 'HBP': 0
     }
 
+    if pitcher_handedness == 'L':
+        # Use hitters_vs_lhp_per_game
+        hitter_specific = c.execute("""
+            SELECT R_per_game, RBI_per_game, "1B_per_game", "2B_per_game", "3B_per_game", HR_per_game,
+                   BB_per_game, K_per_game, SB_per_game, CS_per_game, HBP_per_game
+            FROM hitters_vs_lhp_per_game
+            WHERE MLBAMID = ? OR Name = ?
+        """, (mlbam_id, player_name)).fetchone()
+    elif pitcher_handedness == 'R':
+        # Use hitters_vs_rhp_per_game
+        hitter_specific = c.execute("""
+            SELECT R_per_game, RBI_per_game, "1B_per_game", "2B_per_game", "3B_per_game", HR_per_game,
+                   BB_per_game, K_per_game, SB_per_game, CS_per_game, HBP_per_game
+            FROM hitters_vs_rhp_per_game
+            WHERE MLBAMID = ? OR Name = ?
+        """, (mlbam_id, player_name)).fetchone()
+    else:
+        # Fallback to hitters_per_game
+        hitter_specific = c.execute("""
+            SELECT R_per_game, RBI_per_game, "1B_per_game", "2B_per_game", "3B_per_game", HR_per_game,
+                   BB_per_game, K_per_game, SB_per_game, CS_per_game, HBP_per_game
+            FROM hitters_per_game
+            WHERE MLBAMID = ? OR Name = ?
+        """, (mlbam_id, player_name)).fetchone()
+
+    # Populate base_stats with data from the selected table
+    if hitter_specific:
+        base_stats.update({
+            'R': hitter_specific[0] or 0,
+            'RBI': hitter_specific[1] or 0,
+            '1B': hitter_specific[2] or 0,
+            '2B': hitter_specific[3] or 0,
+            '3B': hitter_specific[4] or 0,
+            'HR': hitter_specific[5] or 0,
+            'BB': hitter_specific[6] or 0,
+            'K': hitter_specific[7] or 0,
+            'SB': hitter_specific[8] or 0,
+            'CS': hitter_specific[9] or 0,
+            'HBP': hitter_specific[10] or 0
+        })
+
+
+# --- NEW: Adjust stats for platoon players facing same-handed pitchers ---
+    platoon_adjustment = 1.0
+    if platoon_matchup and pitcher_handedness and pitcher_handedness != platoon_matchup:
+        platoon_adjustment = 0.25  # Reduce stats by 25% for same-handed matchups
+        base_stats = {stat: value * platoon_adjustment for stat, value in base_stats.items()}
+        print(f"Applying platoon adjustment for {player_name}: {platoon_adjustment}x due to starter throws {pitcher_handedness} and batter starts vs {platoon_matchup} game {game_id}")
+
+    # Apply platoon adjustment to base stats 
     adjusted_stats = adjust_stats(base_stats, park_factors, is_dome, orientation, wind_dir, wind_speed, temp)
     base_score = calculate_sorare_hitter_score(adjusted_stats, SCORING_MATRIX)
     fip_adjusted_score = apply_fip_adjustment(conn, game_id, player_team_id, base_score)
+    # --- MODIFIED: Pass pitcher_handedness to apply_handedness_matchup_adjustment ---
+    handedness_adjusted_score = apply_handedness_matchup_adjustment(
+        conn, game_id, mlbam_id, is_pitcher=False, base_score=fip_adjusted_score)
     injury_data = injuries.get(unique_player_key, injuries.get(player_name, {'status': 'Active', 'return_estimate': None}))    
-    final_score = adjust_score_for_injury(fip_adjusted_score, injury_data['status'], injury_data['return_estimate'], game_date_obj)
+    final_score = adjust_score_for_injury(handedness_adjusted_score, injury_data['status'], injury_data['return_estimate'], game_date_obj)
 
     existing = c.execute("""
         SELECT id FROM AdjustedProjections 
@@ -669,9 +773,13 @@ def process_pitcher(conn, game_data, pitcher_data, injuries, game_week_id, is_st
         # If not a starter, apply a reduction to the score
         base_score *= 0.4
 
+    handedness_adjusted_score = apply_handedness_matchup_adjustment(
+        conn, game_id, mlbam_id, is_pitcher=True, base_score=base_score
+    )
+
     # Try to find injury data with the unique key first, then fall back to just the name
     injury_data = injuries.get(unique_player_key, injuries.get(player_name, {'status': 'Active', 'return_estimate': None}))
-    final_score = adjust_score_for_injury(base_score, injury_data['status'], injury_data['return_estimate'], game_date_obj)
+    final_score = adjust_score_for_injury(handedness_adjusted_score, injury_data['status'], injury_data['return_estimate'], game_date_obj)
 
     # Check if this player already has a projection for this game
     existing = c.execute("""
@@ -698,6 +806,7 @@ def add_projected_starting_pitchers(conn, start_date, end_date):
     """
     Adds projected starting pitchers to the PlayerTeams table even if they're not on active rosters yet.
     This will allow the system to use their existing projections from pitchers_per_game.
+    Also captures their handedness information.
     """
     print("Adding projected starting pitchers to PlayerTeams...")
     c = conn.cursor()
@@ -709,79 +818,69 @@ def add_projected_starting_pitchers(conn, start_date, end_date):
     """, (start_date, end_date)).fetchall()
     
     pitcher_count = 0
+    current_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     
     for game in games:
         game_id, game_date, home_team_id, away_team_id, home_pitcher_id, away_pitcher_id = game
         
-        # Process home pitcher if specified
-        if home_pitcher_id and home_pitcher_id != 'None':
-            # Check if the pitcher is already in PlayerTeams
-            existing = c.execute("SELECT COUNT(*) FROM PlayerTeams WHERE player_id = ?", 
-                                (home_pitcher_id,)).fetchone()[0]
-            
-            if existing == 0:
-                # Pitcher not in PlayerTeams, fetch their details from MLB API
-                try:
-                    url = f"https://statsapi.mlb.com/api/v1/people/{home_pitcher_id}"
-                    response = requests.get(url)
-                    player_data = response.json()
-                    
-                    if 'people' in player_data and len(player_data['people']) > 0:
-                        player = player_data['people'][0]
-                        player_name = normalize_name(player['fullName'])
+        # Process home and away pitchers
+        for pitcher_id, team_id in [(home_pitcher_id, home_team_id), (away_pitcher_id, away_team_id)]:
+            if pitcher_id and pitcher_id != 'None':
+                # Check if the pitcher is already in PlayerTeams
+                existing = c.execute("SELECT COUNT(*) FROM PlayerTeams WHERE player_id = ?", 
+                                    (pitcher_id,)).fetchone()[0]
+                
+                if existing == 0:
+                    # Pitcher not in PlayerTeams, fetch their details from MLB API with hydrate=person
+                    try:
+                        url = f"https://statsapi.mlb.com/api/v1/people/{pitcher_id}?hydrate=person"
+                        response = requests.get(url)
+                        player_data = response.json()
                         
-                        # Check if this player exists in pitchers_per_game
-                        pitcher_exists = c.execute("""
-                            SELECT COUNT(*) FROM pitchers_per_game 
-                            WHERE Name = ? OR MLBAMID = ?
-                        """, (player['fullName'], home_pitcher_id)).fetchone()[0]
-                        
-                        if pitcher_exists > 0:
-                            # Add to the PlayerTeams table to connect them to their stats
-                            c.execute("""
-                                INSERT INTO PlayerTeams (player_id, player_name, team_id, mlbam_id)
-                                VALUES (?, ?, ?, ?)
-                            """, (str(home_pitcher_id), player_name, home_team_id, str(home_pitcher_id)))
+                        if 'people' in player_data and len(player_data['people']) > 0:
+                            player = player_data['people'][0]
+                            player_name = normalize_name(player['fullName'])
                             
-                            pitcher_count += 1
-                            print(f"Added projected starter: {player_name} (ID: {home_pitcher_id}) to team {home_team_id}")
-                except Exception as e:
-                    print(f"Error fetching pitcher {home_pitcher_id} data: {e}")
-        
-        # Process away pitcher if specified
-        if away_pitcher_id and away_pitcher_id != 'None':
-            # Check if the pitcher is already in PlayerTeams
-            existing = c.execute("SELECT COUNT(*) FROM PlayerTeams WHERE player_id = ?", 
-                                (away_pitcher_id,)).fetchone()[0]
-            
-            if existing == 0:
-                # Pitcher not in PlayerTeams, fetch their details from MLB API
-                try:
-                    url = f"https://statsapi.mlb.com/api/v1/people/{away_pitcher_id}"
-                    response = requests.get(url)
-                    player_data = response.json()
-                    
-                    if 'people' in player_data and len(player_data['people']) > 0:
-                        player = player_data['people'][0]
-                        player_name = normalize_name(player['fullName'])
-                        
-                        # Check if this player exists in pitchers_per_game
-                        pitcher_exists = c.execute("""
-                            SELECT COUNT(*) FROM pitchers_per_game 
-                            WHERE Name = ? OR MLBAMID = ?
-                        """, (player['fullName'], away_pitcher_id)).fetchone()[0]
-                        
-                        if pitcher_exists > 0:
-                            # Add to the PlayerTeams table to connect them to their stats
-                            c.execute("""
-                                INSERT INTO PlayerTeams (player_id, player_name, team_id, mlbam_id)
-                                VALUES (?, ?, ?, ?)
-                            """, (str(away_pitcher_id), player_name, away_team_id, str(away_pitcher_id)))
+                            # Check if this player exists in pitchers_per_game
+                            pitcher_exists = c.execute("""
+                                SELECT COUNT(*) FROM pitchers_per_game 
+                                WHERE Name = ? OR MLBAMID = ?
+                            """, (player['fullName'], pitcher_id)).fetchone()[0]
                             
-                            pitcher_count += 1
-                            print(f"Added projected starter: {player_name} (ID: {away_pitcher_id}) to team {away_team_id}")
-                except Exception as e:
-                    print(f"Error fetching pitcher {away_pitcher_id} data: {e}")
+                            if pitcher_exists > 0:
+                                # Add to the PlayerTeams table to connect them to their stats
+                                c.execute("""
+                                    INSERT INTO PlayerTeams (player_id, player_name, team_id, mlbam_id)
+                                    VALUES (?, ?, ?, ?)
+                                """, (str(pitcher_id), player_name, team_id, str(pitcher_id)))
+                                
+                                # Extract handedness data
+                                bats = player.get('batSide', {}).get('code', 'Unknown')
+                                throws = player.get('pitchHand', {}).get('code', 'Unknown')
+                                
+                                # Check if player already exists in handedness table
+                                existing_hand = c.execute("SELECT id FROM PlayerHandedness WHERE mlbam_id = ?", 
+                                                        (pitcher_id,)).fetchone()
+                                
+                                if existing_hand:
+                                    # Update existing record
+                                    c.execute("""
+                                        UPDATE PlayerHandedness 
+                                        SET bats = ?, throws = ?, last_updated = ?
+                                        WHERE mlbam_id = ?
+                                    """, (bats, throws, current_date, pitcher_id))
+                                else:
+                                    # Insert new record
+                                    c.execute("""
+                                        INSERT INTO PlayerHandedness 
+                                        (player_id, mlbam_id, player_name, bats, throws, last_updated)
+                                        VALUES (?, ?, ?, ?, ?, ?)
+                                    """, (str(pitcher_id), str(pitcher_id), player_name, bats, throws, current_date))
+                                
+                                pitcher_count += 1
+                                print(f"Added projected starter: {player_name} (ID: {pitcher_id}) to team {team_id} - Throws: {throws}, Bats: {bats}")
+                    except Exception as e:
+                        print(f"Error fetching pitcher {pitcher_id} data: {e}")
     
     conn.commit()
     print(f"Added {pitcher_count} projected starting pitchers to PlayerTeams")
@@ -812,6 +911,7 @@ def calculate_adjustments(conn, start_date, end_date, game_week_id):
             team_id = team_result[0]
             unique_key = f"{player_name}_{team_id}"
             injuries[unique_key] = injury_data
+
     
     # Use local_date for filtering instead of date
     games = c.execute("""
@@ -947,6 +1047,125 @@ def main(update_rosters=False, specified_date=None):
 if __name__ == "__main__":
     main()
 
+def get_player_handedness(conn, mlbam_id=None, player_name=None):
+    """
+    Retrieves handedness information for a player by MLBAM ID or name.
+    
+    Args:
+        conn (sqlite3.Connection): Database connection
+        mlbam_id (str, optional): Player's MLBAM ID
+        player_name (str, optional): Player's name
+        
+    Returns:
+        dict: Player handedness data containing 'bats' and 'throws' values
+    """
+    c = conn.cursor()
+    
+    if mlbam_id:
+        result = c.execute("""
+            SELECT bats, throws FROM PlayerHandedness
+            WHERE mlbam_id = ?
+        """, (str(mlbam_id),)).fetchone()
+    elif player_name:
+        normalized_name = normalize_name(player_name)
+        result = c.execute("""
+            SELECT bats, throws FROM PlayerHandedness
+            WHERE player_name = ?
+        """, (normalized_name,)).fetchone()
+    else:
+        return {'bats': 'Unknown', 'throws': 'Unknown'}
+    
+    if result:
+        return {'bats': result[0], 'throws': result[1]}
+    else:
+        return {'bats': 'Unknown', 'throws': 'Unknown'}
+    
+def apply_handedness_matchup_adjustment(conn, game_id, player_mlbam_id, is_pitcher, base_score):
+    """
+    Applies a matchup adjustment based on batter-pitcher handedness matchup.
+    
+    Args:
+        conn (sqlite3.Connection): Database connection
+        game_id (int): Game ID
+        player_mlbam_id (str): Player's MLBAM ID
+        is_pitcher (bool): Whether the player is a pitcher
+        base_score (float): Base score to adjust
+        
+    Returns:
+        float: Adjusted score based on the handedness matchup
+    """
+    c = conn.cursor()
+    
+    # Get game information
+    game_data = c.execute("""
+        SELECT home_team_id, away_team_id, home_probable_pitcher_id, away_probable_pitcher_id 
+        FROM Games WHERE id = ?
+    """, (game_id,)).fetchone()
+    
+    if not game_data or not player_mlbam_id:
+        return base_score
+    
+    home_team_id, away_team_id, home_pitcher_id, away_pitcher_id = game_data
+    
+    # Get player team and handedness
+    player_data = c.execute("""
+        SELECT team_id FROM PlayerTeams WHERE mlbam_id = ?
+    """, (player_mlbam_id,)).fetchone()
+    
+    if not player_data:
+        return base_score
+    
+    player_team_id = player_data[0]
+    player_handedness = get_player_handedness(conn, mlbam_id=player_mlbam_id)
+    
+    # For pitchers
+    if is_pitcher:
+        # Determine if this is a home or away pitcher
+        if player_team_id == home_team_id:
+            opponent_team_id = away_team_id
+        else:
+            opponent_team_id = home_team_id
+            
+        # Get opposing team's batter handedness distribution
+        batter_counts = {"L": 0, "R": 0, "S": 0}
+        batters = c.execute("""
+            SELECT ph.mlbam_id, ph.bats 
+            FROM PlayerHandedness ph
+            JOIN PlayerTeams pt ON ph.mlbam_id = pt.mlbam_id
+            WHERE pt.team_id = ?
+        """, (opponent_team_id,)).fetchall()
+        
+        for _, bats in batters:
+            if bats in batter_counts:
+                batter_counts[bats] += 1
+            else:
+                batter_counts["Unknown"] = batter_counts.get("Unknown", 0) + 1
+        
+        # Calculate advantage based on pitcher's throwing hand and opponent's batting profile
+        throws = player_handedness.get('throws', 'Unknown')
+        if throws == 'L':
+            # Left-handed pitchers typically fare better against left-handed batters
+            lefty_ratio = batter_counts.get('L', 0) / max(sum(batter_counts.values()), 1)
+            # Adjust score based on matchup quality
+            if lefty_ratio > 0.4:  # Team has lots of lefty batters
+                return base_score * 1.15
+            elif lefty_ratio < 0.2:  # Team has few lefty batters
+                return base_score * 0.95
+        elif throws == 'R':
+            # Right-handed pitchers typically fare better against right-handed batters
+            righty_ratio = batter_counts.get('R', 0) / max(sum(batter_counts.values()), 1)
+            # Adjust score based on matchup quality
+            if righty_ratio > 0.7:  # Team has lots of righty batters
+                return base_score * 1.05
+            elif righty_ratio < 0.5:  # Team has few righty batters
+                return base_score * 0.95
+    
+    # For batters
+    else:
+        # no need to apply handedness adjustment for batters as it is already handled with per_game stats
+        return base_score
+        
+    return base_score
 
 def apply_fip_adjustment(conn, game_id, hitter_team_id, base_score):
     """

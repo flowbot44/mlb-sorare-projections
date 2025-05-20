@@ -6,6 +6,7 @@ import argparse
 from typing import Dict, List, Set, Optional
 from utils import determine_game_week, DATABASE_FILE  # Import from utils
 from datetime import datetime, timedelta
+from pandas.errors import DatabaseError
 
 
 # Configuration Constants
@@ -81,7 +82,7 @@ def fetch_cards(username: str) -> pd.DataFrame:
 
     return cards_df
 
-def fetch_projections(ignore_game_ids: list = None) -> pd.DataFrame:
+def fetch_projections(ignore_game_ids: Optional[List] = None) -> pd.DataFrame:
     """
     Fetch Sorare projections for the current game week with team separation.
     
@@ -113,8 +114,8 @@ def fetch_projections(ignore_game_ids: list = None) -> pd.DataFrame:
         query += " GROUP BY player_name, team_id"
         
         # Execute query and return dataframe
-        projections_df = pd.read_sql(query, conn, params=params)
-        projections_df["total_projection"] = projections_df["total_projection"].fillna(0).infer_objects(copy=False)
+        projections_df = pd.read_sql(query, conn, params=tuple(params))
+        projections_df["total_projection"] = projections_df["total_projection"].fillna(0).infer_objects()
     
     return projections_df
 
@@ -393,7 +394,7 @@ def build_lineup_optimized(cards_df: pd.DataFrame, lineup_type: str, used_cards:
 
 def build_all_lineups(cards_df: pd.DataFrame, projections_df: pd.DataFrame, energy_limits: Dict[str, int],
                      boost_2025: float, stack_boost: float, energy_per_card: int,
-                     ignore_list: List[str] = None) -> Dict[str, Dict]:
+                     ignore_list: Optional[List[str]] = None) -> Dict[str, Dict]:
     """Build optimal lineups respecting global energy constraints."""
     check_missing_projections(cards_df, projections_df)
 
@@ -418,7 +419,7 @@ def build_all_lineups(cards_df: pd.DataFrame, projections_df: pd.DataFrame, ener
         left_on=["name", "team_id"], 
         right_on=["player_name", "team_id"], 
         how="left"
-    ).fillna({"total_projection": 0}).infer_objects(copy=False)
+    ).fillna({"total_projection": 0}).infer_objects()
     
     used_cards = set()
     remaining_energy = energy_limits.copy()
@@ -490,7 +491,7 @@ def fetch_high_rain_games_details():
             LEFT JOIN Stadiums s ON g.stadium_id = s.id
             WHERE wf.rain >= 75
             ORDER BY g.date ASC, g.time ASC;
-        """
+            """
         try:
             df = pd.read_sql(query, conn)
             # Basic type conversion check
@@ -500,13 +501,13 @@ def fetch_high_rain_games_details():
             df['wind_dir'] = pd.to_numeric(df['wind_dir'], errors='coerce')
             df = df.dropna(subset=['rain']) # Remove rows where rain couldn't be parsed
             return df
-        except pd.io.sql.DatabaseError as e:
+        except DatabaseError as e:
              print(f"Database query error: {e}. Check if tables 'Games' or 'Stadiums' exist or have correct columns.")
              return pd.DataFrame(columns=['game_id', 'game_date', 'game_time_utc', 'rain', 'temp', 'wind_speed', 'wind_dir', 'home_team_id', 'away_team_id', 'stadium_name'])
         except Exception as e:
             print(f"An unexpected error occurred during fetch_high_rain_games_details: {e}")
             return pd.DataFrame(columns=['game_id', 'game_date', 'game_time_utc', 'rain', 'temp', 'wind_speed', 'wind_dir', 'home_team_id', 'away_team_id', 'stadium_name'])
-
+           
 # --- Updated Function ---
 
 def generate_weather_report() -> str:

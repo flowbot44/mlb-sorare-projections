@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, date
 import os
 import math
 import sqlite3
+from typing import Optional
 import pytz
 
 DATABASE_FILE = os.environ.get('DATABASE_PATH', 'mlb_sorare.db')
@@ -62,6 +63,24 @@ def determine_game_week(current_date=None):
             end_date = start_date + timedelta(days=3)
 
     return f"{start_date.strftime('%Y-%m-%d')}_to_{end_date.strftime('%Y-%m-%d')}"
+
+def get_platoon_start_side_by_mlbamid(mlbam_id: int) -> Optional[str]:
+    """
+    Returns the handedness ('L' or 'R') of pitcher the player starts against,
+    based on their platoon profile.
+
+    Returns None if the player is not in the platoon_players table.
+    """
+    conn = get_db_connection()
+    conn.row_factory = sqlite3.Row
+    cursor = conn.execute(
+        'SELECT starts_vs FROM platoon_players WHERE mlbam_id = ?', 
+        (mlbam_id,)
+    )
+    row = cursor.fetchone()
+    conn.close()
+
+    return row['starts_vs'] if row else None
 
 
 def main():

@@ -1,0 +1,67 @@
+{% extends 'base.html' %}
+
+{% block title %}Platoon Players{% endblock %}
+
+{% block content %}
+<h2 class="mt-4">Submit Platoon Player</h2>
+<form method="POST" class="mb-4">
+    <div class="mb-3">
+        <label for="name" class="form-label">Player Name</label>
+        <input list="name-options" class="form-control" id="name" name="name" required>
+        <datalist id="name-options">
+            {% for pair in name_id_pairs %}
+                <option value="{{ pair[0] }}" data-id="{{ pair[1] }}"></option>
+            {% endfor %}
+        </datalist>
+        <input type="hidden" id="mlbam_id" name="mlbam_id">
+    </div>
+    <div class="mb-3">
+        <label for="starts_vs" class="form-label">Starts vs</label>
+        <select class="form-select" id="starts_vs" name="starts_vs" required>
+            <option value="L">Left-handed Pitcher</option>
+            <option value="R">Right-handed Pitcher</option>
+        </select>
+    </div>
+    <button type="submit" class="btn btn-primary">Submit</button>
+</form>
+
+<h3>Current Platoon Players</h3>
+<table class="table">
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Starts vs</th>
+            <th>Action</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for player in players %}
+        <tr>
+            <td>{{ player[1] }}</td>
+            <td>{{ player[2] }}</td>
+            <td>
+                <form method="POST" action="{{ url_for('delete_platoon_player', id=player[0]) }}">
+                    <button type="submit" class="btn btn-danger btn-sm">Delete</button>
+                </form>
+            </td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+
+<script>
+    // Link selected name to corresponding MLBAMID
+    const nameInput = document.getElementById('name');
+    const mlbamIdInput = document.getElementById('mlbam_id');
+    const datalist = document.getElementById('name-options');
+
+    nameInput.addEventListener('input', function() {
+        const selectedOption = Array.from(datalist.options).find(option => option.value === nameInput.value);
+        if (selectedOption) {
+            mlbamIdInput.value = selectedOption.getAttribute('data-id');
+        } else {
+            mlbamIdInput.value = '';
+        }
+    });
+</script>
+{% endblock %}
