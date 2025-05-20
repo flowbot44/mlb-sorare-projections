@@ -117,10 +117,9 @@ def login_to_fangraphs(driver, username, password, max_retries=3):
     
     return False
 
-def download_projection_data(driver, download_dir, output_dir, stat_type="bat", max_retries=3):
+def download_projection_data(driver, download_dir, output_dir, projection_type, filename, url=None, stat_type="bat", max_retries=3):
     """Download specific projection data type with retries"""
-    friendly_name = "batter" if stat_type == "bat" else "pitcher"
-    dest_file = os.path.join(output_dir, f"{friendly_name}.csv")
+    dest_file = os.path.join(output_dir, filename)
     
     # Clean up any preexisting .csv and .crdownload files
     for f in glob.glob(os.path.join(download_dir, "*.csv")):
@@ -130,11 +129,15 @@ def download_projection_data(driver, download_dir, output_dir, stat_type="bat", 
     
     for attempt in range(max_retries):
         try:
-            logger.info(f"Download attempt {attempt+1}/{max_retries} for {friendly_name} projections")
+            logger.info(f"Download attempt {attempt+1}/{max_retries} for {projection_type} projections")
             
             # Navigate to projections page
-            projections_url = f"https://www.fangraphs.com/projections?type=rfangraphsdc&stats={stat_type}&pos=all&team=0&players=0"
-            logger.info(f"Navigating to {friendly_name} projections page: {projections_url}")
+            if url:
+                projections_url = url
+            else:
+                projections_url = f"https://www.fangraphs.com/projections?type=rfangraphsdc&stats={stat_type}&pos=all&team=0&players=0"
+            
+            logger.info(f"Navigating to {projection_type} projections page: {projections_url}")
             driver.get(projections_url)
             
             logger.info("Waiting for projections page to load...")
@@ -147,7 +150,7 @@ def download_projection_data(driver, download_dir, output_dir, stat_type="bat", 
                 )
                 logger.info("Data grid found!")
             except TimeoutException:
-                screenshot_path = f"no_data_grid_{friendly_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
+                screenshot_path = f"no_data_grid_{projection_type}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
                 driver.save_screenshot(screenshot_path)
                 logger.error(f"Data grid not found. Screenshot saved: {screenshot_path}")
                 if attempt == max_retries - 1:
@@ -210,7 +213,7 @@ def download_projection_data(driver, download_dir, output_dir, stat_type="bat", 
             return dest_file
             
         except Exception as e:
-            logger.error(f"Error downloading {friendly_name} projections: {str(e)}")
+            logger.error(f"Error downloading {projection_type} projections: {str(e)}")
             if attempt == max_retries - 1:
                 return None
             time.sleep(5)  # Wait before retrying
@@ -253,21 +256,69 @@ def main():
                 logger.error("Login failed. Exiting.")
                 return 1
             
-            # Download batter projections
-            logger.info("\n=== DOWNLOADING BATTER PROJECTIONS ===\n")
-            batter_file = download_projection_data(driver, download_dir, output_dir, stat_type="bat")
+            # Download standard projections
+            logger.info("\n=== DOWNLOADING STANDARD PROJECTIONS ===\n")
+            
+            # Batter projections
+            batter_file = download_projection_data(
+                driver, 
+                download_dir, 
+                output_dir, 
+                "batter", 
+                "batter.csv", 
+                stat_type="bat"
+            )
             if batter_file:
                 logger.info(f"Batter projections downloaded to: {batter_file}")
             else:
                 logger.error("Batter projections download failed.")
             
-            # Download pitcher projections
-            logger.info("\n=== DOWNLOADING PITCHER PROJECTIONS ===\n")
-            pitcher_file = download_projection_data(driver, download_dir, output_dir, stat_type="pit")
+            # Pitcher projections
+            pitcher_file = download_projection_data(
+                driver, 
+                download_dir, 
+                output_dir, 
+                "pitcher", 
+                "pitcher.csv", 
+                stat_type="pit"
+            )
             if pitcher_file:
                 logger.info(f"Pitcher projections downloaded to: {pitcher_file}")
             else:
                 logger.error("Pitcher projections download failed.")
+            
+            # Download split projections
+            logger.info("\n=== DOWNLOADING SPLIT PROJECTIONS ===\n")
+            
+            # Batters vs RHP
+            batter_vs_rhp_url = "https://www.fangraphs.com/projections?type=rsteamer_vr_0&stats=bat&pos=all&team=0&players=0&lg=all"
+            batter_vs_rhp_file = download_projection_data(
+                driver, 
+                download_dir, 
+                output_dir, 
+                "batter_vs_rhp", 
+                "batter_vs_rhp.csv", 
+                url=batter_vs_rhp_url
+            )
+            if batter_vs_rhp_file:
+                logger.info(f"Batter vs RHP projections downloaded to: {batter_vs_rhp_file}")
+            else:
+                logger.error("Batter vs RHP projections download failed.")
+            
+            # Batters vs LHP
+            batter_vs_lhp_url = "https://www.fangraphs.com/projections?type=rsteamer_vl_0&stats=bat&pos=all&team=0&players=0&lg=all"
+            batter_vs_lhp_file = download_projection_data(
+                driver, 
+                download_dir, 
+                output_dir, 
+                "batter_vs_lhp", 
+                "batter_vs_lhp.csv", 
+                url=batter_vs_lhp_url
+            )
+            if batter_vs_lhp_file:
+                logger.info(f"Batter vs LHP projections downloaded to: {batter_vs_lhp_file}")
+            else:
+                logger.error("Batter vs LHP projections download failed.")
             
         except Exception as e:
             logger.error(f"An unexpected error occurred: {str(e)}")

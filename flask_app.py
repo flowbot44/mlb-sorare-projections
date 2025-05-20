@@ -3,7 +3,7 @@
 import os
 import subprocess
 import time
-from flask import Flask, render_template, request, jsonify, send_file
+from flask import Flask, render_template, request, jsonify, send_file,  redirect, url_for
 import pandas as pd
 from datetime import datetime, timedelta, date
 import sqlite3
@@ -96,12 +96,12 @@ def check_and_create_db():
         # Check for existence of required tables
         tables_query = """
         SELECT name FROM sqlite_master 
-        WHERE type='table' AND name IN ('hitters_per_game', 'pitchers_per_game', 'ParkFactors', 'Stadiums')
+        WHERE type='table' AND name IN ('hitters_vs_rhp_per_game', 'hitters_vs_lhp_per_game', 'hitters_per_game', 'pitchers_per_game', 'ParkFactors', 'Stadiums')
         """
         tables = cursor.execute(tables_query).fetchall()
         table_names = [t[0] for t in tables]
         
-        required_tables = ['hitters_per_game', 'pitchers_per_game', 'ParkFactors', 'Stadiums']
+        required_tables = ['hitters_vs_rhp_per_game', 'hitters_vs_lhp_per_game', 'hitters_per_game', 'pitchers_per_game', 'ParkFactors', 'Stadiums']
         missing_tables = [table for table in required_tables if table not in table_names]
         
         conn.close()
@@ -240,6 +240,35 @@ def generate_lineup():
     lineup_order = request.form.get('lineup_order', ','.join(DEFAULT_LINEUP_ORDER))
     ignore_players = request.form.get('ignore_players', '')
     ignore_games = request.form.get('ignore_games', '')
+
+        # Server-side validation
+    if not username:
+        return jsonify({'error': "Sorare Username is required."}), 400
+    
+    try:
+        rare_energy = int(rare_energy)
+    except (ValueError, TypeError):
+        return jsonify({'error': "Rare Energy is required and must be a number."}), 400
+
+    try:
+        limited_energy = int(limited_energy)
+    except (ValueError, TypeError):
+        return jsonify({'error': "Limited Energy is required and must be a number."}), 400
+
+    try:
+        boost_2025 = float(boost_2025)
+    except (ValueError, TypeError):
+        return jsonify({'error': "2025 Card Boost is required and must be a number."}), 400
+
+    try:
+        stack_boost = float(stack_boost)
+    except (ValueError, TypeError):
+        return jsonify({'error': "Stack Boost is required and must be a number."}), 400
+
+    try:
+        energy_per_card = int(energy_per_card)
+    except (ValueError, TypeError):
+        return jsonify({'error': "Energy per card must be a number."}), 400
     
     # Parse ignore players list
     ignore_list = []
@@ -268,7 +297,10 @@ def generate_lineup():
         "rare": rare_energy,
         "limited": limited_energy
     }
-    
+
+    if not username:
+        return jsonify({'error': "Username is required."})
+
     try:
         # FIRST: Fetch latest cards from Sorare API for this user
         sorare_client = SorareMLBClient()
@@ -439,6 +471,50 @@ def generate_lineup():
         
     except Exception as e:
         return jsonify({'error': f"Error generating lineup: {str(e)}"})
+    
+@app.route('/platoon', methods=['GET', 'POST'])
+def platoon():
+    conn = get_db_connection()
+
+    c = conn.cursor()
+    # Create platoon_players table if it doesn't exist
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS platoon_players (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            mlbam_id INTEGER NOT NULL,
+            starts_vs TEXT CHECK(starts_vs IN ('R', 'L'))
+        )
+    ''')
+    conn.commit()
+
+    if request.method == 'POST':
+        name = request.form['name']
+        mlbam_id = request.form['mlbam_id']
+        starts_vs = request.form['starts_vs']
+        conn.execute(
+            'INSERT INTO platoon_players (name, mlbam_id, starts_vs) VALUES (?, ?, ?)',
+            (name, mlbam_id, starts_vs)
+        )
+        conn.commit()
+
+    players = conn.execute('SELECT id, name, starts_vs FROM platoon_players').fetchall()
+    name_id_pairs = conn.execute('''
+        SELECT DISTINCT Name, MLBAMID FROM hitters_per_game
+        WHERE MLBAMID IS NOT NULL
+    ''').fetchall()
+    conn.close()
+
+    return render_template('platoon.html', players=players, name_id_pairs=name_id_pairs)
+
+@app.route('/platoon/delete/<int:id>', methods=['POST'])
+def delete_platoon_player(id):
+    conn = get_db_connection()
+    conn.execute('DELETE FROM platoon_players WHERE id = ?', (id,))
+    conn.commit()
+    conn.close()
+    return redirect(url_for('platoon'))
+
 
 @app.route('/weather_report', methods=['GET'])
 def weather_report():

@@ -176,6 +176,35 @@ document.addEventListener('DOMContentLoaded', function () {
         lineupForm.addEventListener('submit', (event) => {
             event.preventDefault(); // Prevent the default form submission behavior
 
+            // Get form fields
+            const username = document.getElementById('username').value.trim();
+            const rareEnergy = document.getElementById('rare_energy').value.trim();
+            const limitedEnergy = document.getElementById('limited_energy').value.trim();
+            const boost2025 = document.getElementById('boost_2025').value.trim();
+            const stackBoost = document.getElementById('stack_boost').value.trim();
+
+            // Validate fields
+            if (!username) {
+                alert('Sorare Username is required.');
+                return;
+            }
+            if (!rareEnergy || isNaN(rareEnergy)) {
+                alert('Rare Energy is required and must be a number.');
+                return;
+            }
+            if (!limitedEnergy || isNaN(limitedEnergy)) {
+                alert('Limited Energy is required and must be a number.');
+                return;
+            }
+            if (!boost2025 || isNaN(boost2025)) {
+                alert('2025 Card Boost is required and must be a number.');
+                return;
+            }
+            if (!stackBoost || isNaN(stackBoost)) {
+                alert('Stack Boost is required and must be a number.');
+                return;
+            }
+
             // Show loading spinner
             document.querySelector('.loading').style.display = 'block';
             document.getElementById('loadingMessage').textContent = 'Generating lineups...';

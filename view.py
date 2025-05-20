@@ -44,7 +44,7 @@ def get_all_games():
 def get_all_projections():
     conn = sqlite3.connect(db_path)  # Create/connect to the database file
  
-    cursor = conn.execute("SELECT * FROM AdjustedProjections WHERE player_name IN ('TREA TURNER')")
+    cursor = conn.execute("SELECT * FROM AdjustedProjections WHERE player_name IN ('ALEK THOMAS', 'TIM TAWA')")
 
     
     for row in cursor:
@@ -54,19 +54,41 @@ def get_all_projections():
 
 def get_all_stats():
     conn = sqlite3.connect(db_path)  # Create/connect to the database file
-    #cursor = conn.execute("PRAGMA table_info(pitchers_full_season)")
+    #cursor = conn.execute("PRAGMA table_info(hitters_per_game)")
     #cursor = conn.execute('SELECT `1B_per_game`, "2B_per_game", "3B_per_game" FROM hitters_per_game WHERE name IN ("KYLE TUCKER")')
-    cursor = conn.execute("SELECT name, fip FROM pitchers_full_season WHERE name IN ('TYLOR MEGILL', 'GRIFFIN CANNING', 'DAVID PETERSON')")
+    cursor = conn.execute("SELECT DISTINCT Name, MLBAMID FROM hitters_per_game WHERE MLBAMID IS NOT NULL")
+    #cursor = conn.execute("SELECT name, fip FROM pitchers_full_season WHERE name IN ('TYLOR MEGILL', 'GRIFFIN CANNING', 'DAVID PETERSON')")
+
     #cursor = conn.execute("SELECT HLD_per_game, IP_per_game, H_per_game, ER_per_game, BB_per_game, HBP_per_game, W_per_game, K_per_game FROM pitchers_per_game WHERE name IN ('PAUL SEWALD','TANNER BIBEE')")
     for row in cursor:
         print(row) #This will print tuples of the rows in the db.
     
     conn.close()
+def get_all_hitters_stats():
+    conn = sqlite3.connect(db_path)  # Create/connect to the database file
+
+    for prefix in {'hitters', 'hitters_vs_rhp', 'hitters_vs_lhp',}:
+        cursor = conn.execute(f"SELECT name, G, HR_per_game, RBI_per_game, K_per_game FROM {prefix}_per_game WHERE name IN ('ELLY DE LA CRUZ')")
+        #cursor = conn.execute(f"PRAGMA table_info({prefix}_per_game)")
+        print(f"Stats for {prefix}:")
+        for row in cursor:
+            print(row) #This will print tuples of the rows in the db.
+    conn.close()
 
 def get_all_teams():
     conn = sqlite3.connect(db_path)  # Create/connect to the database file
 
-    cursor = conn.execute("SELECT * FROM PlayerTeams where player_name IN ('JUNIOR CAMINERO','MATT WALLNER')")
+    cursor = conn.execute("SELECT * FROM PlayerTeams where player_name IN ('LAMONTE WADE JR', 'LUIS MATOS')")
+
+    for row in cursor:
+        print(row) #This will print tuples of the rows in the db.
+    
+    conn.close()
+
+def get_player_handedness():
+    conn = sqlite3.connect(db_path)  # Create/connect to the database file
+
+    cursor = conn.execute("SELECT * FROM PlayerHandedness where player_name IN ('JUNIOR CAMINERO','MATT WALLNER')")
 
     for row in cursor:
         print(row) #This will print tuples of the rows in the db.
@@ -95,8 +117,10 @@ def get_best_players():
 def main():
     #get_all_players()
     #get_cards_with_injuries()
-    #get_all_stats()
-    get_all_projections()
+    get_all_stats()
+    #get_all_hitters_stats()
+    #get_all_projections()
+    #get_player_handedness()
     #get_all_teams()
     #get_best_players()
     #get_all_games()
