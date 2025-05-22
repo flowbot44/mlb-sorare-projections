@@ -38,9 +38,9 @@ def create_headless_driver(download_dir: str) -> webdriver.Chrome:
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
     chrome_options.add_argument("--window-size=1920,1080")
+    chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
     
-    # Use the pre-installed Chromium from the Docker image
-    chromium_path = os.environ.get('CHROME_BIN', '/usr/bin/chromium')
+    chromium_path = os.environ.get('CHROME_BIN', '/usr/bin/google-chrome')
     chromedriver_path = os.environ.get('CHROMEDRIVER_PATH', '/usr/bin/chromedriver')
     
     logger.info(f"Using Chromium at: {chromium_path}")
@@ -48,7 +48,6 @@ def create_headless_driver(download_dir: str) -> webdriver.Chrome:
     
     chrome_options.binary_location = chromium_path
     
-    # Set download preferences
     prefs = {
         "download.default_directory": download_dir,
         "download.prompt_for_download": False,
@@ -58,9 +57,9 @@ def create_headless_driver(download_dir: str) -> webdriver.Chrome:
     chrome_options.add_experimental_option("prefs", prefs)
     
     try:
-        # Use the pre-installed ChromeDriver
-        service = Service(executable_path=chromedriver_path)
+        service = Service(executable_path=chromedriver_path, port=9515, log_path="/app/chromedriver.log")
         driver = webdriver.Chrome(service=service, options=chrome_options)
+        logger.info("ChromeDriver initialized successfully")
         return driver
     except Exception as e:
         logger.error(f"Failed to create Chrome driver: {str(e)}")
