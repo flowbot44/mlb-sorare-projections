@@ -24,7 +24,6 @@ PGDATABASE = os.environ["PGDATABASE"]
 
 DATABASE_URL = f"postgresql://{PGUSER}:{PGPASSWORD}@{PGHOST}:{PGPORT}/{PGDATABASE}"
 
-logging.info(f"Connecting to database at {DATABASE_URL}")
 
 # Absolute path to the folder where utils.py is located
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))

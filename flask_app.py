@@ -150,8 +150,9 @@ def run_full_update():
 
         return True
     except subprocess.CalledProcessError as e:
-        logger.error(f"Subprocess failed: {e.cmd} exited with code {e.returncode}. Output: {e.output.decode()}")
-        return False
+       output = e.output.decode() if e.output else "<no output>"
+       logger.error(f"Subprocess failed: {e.cmd} exited with code {e.returncode}. Output: {output}")
+       return False
     except Exception as e:
         logger.error(f"Error during full update: {str(e)}")
         return False
