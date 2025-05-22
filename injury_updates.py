@@ -4,6 +4,16 @@ import requests
 # It is critical that utils.py's get_db_connection now returns a psycopg2 connection
 from utils import normalize_name, get_db_connection
 
+import logging
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[logging.StreamHandler()]
+)
+logger = logging.getLogger("injury_updates")
+
+
 # Define the API URL for injury data
 api_url = "https://site.api.espn.com/apis/site/v2/sports/baseball/mlb/injuries"
 
@@ -12,14 +22,16 @@ def fetch_injury_data():
     Fetches MLB injury data from the ESPN API.
     """
     try:
+        logger.info("Fetching injury data from ESPN API...")
         response = requests.get(api_url)
         response.raise_for_status()  # Raise an HTTPError for bad responses (4xx or 5xx)
         return response.json()
     except requests.exceptions.RequestException as e:
-        print(f"Failed to fetch injury data: {e}")
+        logger.error(f"Failed to fetch injury data: {e}")
         return None
 
 def update_database(data):
+    logger.info("Updating database with injury data...")
     """
     Updates the 'injuries' table in the database with fetched injury data.
     """
@@ -70,9 +82,10 @@ def update_database(data):
                 """, (player_name, team_name, status, description, long_description, return_estimate))
 
         conn.commit() # Commit changes to the database
+        print("Injury data updated successfully.")
 
     except Exception as e:
-        print(f"An error occurred during database update: {e}")
+        logger.error(f"An error occurred during database update: {e}")
         conn.rollback() # Rollback in case of error
     finally:
         cursor.close()
