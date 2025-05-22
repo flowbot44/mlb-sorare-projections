@@ -3,9 +3,13 @@ import os
 from utils import get_sqlalchemy_engine, normalize_name, DATA_DIR
 import logging
 from sqlalchemy import text
-
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[logging.StreamHandler()]
+)
+logger = logging.getLogger("depth_projection")
 
 # Construct file paths
 hitter_file = os.path.join(DATA_DIR, 'batter.csv')
@@ -16,14 +20,14 @@ hitter_vs_lhp_file = os.path.join(DATA_DIR, 'batter_vs_lhp.csv')
 # Function to check and display CSV column names
 def check_csv_columns(filepath):
     if not os.path.exists(filepath):
-        print(f"ERROR: File {filepath} does not exist!")
+        logger.error(f"ERROR: File {filepath} does not exist!")
         return None
     
     try:
         df = pd.read_csv(filepath, nrows=1)
         return df.columns.tolist()
     except Exception as e:
-        print(f"Error reading {filepath}: {e}")
+        logger.error(f"Error reading {filepath}: {e}")
         return None
 
 # Function to determine name column
@@ -36,7 +40,7 @@ def determine_name_column(columns, file_type="hitter"):
     for possible_name in possible_names:
         if possible_name in [col.lower() for col in columns]:
             name_col = possible_name
-            print(f"Using '{name_col}' as the {file_type} name column")
+            logger.info(f"Using '{name_col}' as the {file_type} name column")
             break
     
     return name_col
@@ -131,15 +135,15 @@ def process_dataset(df, name_col, table_prefix, conn, col_map=None, is_pitcher=F
         with conn.begin():  # Transaction is managed here
             conn.execute(text(f'DROP TABLE IF EXISTS {table_prefix}_full_season'))
             conn.execute(text(f'DROP TABLE IF EXISTS {table_prefix}_per_game'))
-            print(f"Dropped tables {table_prefix}_full_season and {table_prefix}_per_game")
+            logger.info(f"Dropped tables {table_prefix}_full_season and {table_prefix}_per_game")
     except Exception as e:
-        print(f"Error dropping tables: {e}")
+        logger.error(f"Error dropping tables: {e}")
         raise
     
-    print(f"Creating {table_prefix}_full_season table...")
+    logger.info(f"Creating {table_prefix}_full_season table...")
     df.to_sql(f'{table_prefix}_full_season', conn.engine, if_exists='replace', index=False, method='multi')
     
-    print(f"Calculating per-game stats for {table_prefix}...")
+
     if is_pitcher:
         per_game_df = df.apply(lambda row: prorate_pitcher(row, name_col, col_map), axis=1)
     else:     
@@ -150,7 +154,7 @@ def process_dataset(df, name_col, table_prefix, conn, col_map=None, is_pitcher=F
     if 'mlbamid' in per_game_df.columns:
         per_game_df['mlbamid'] = per_game_df['mlbamid'].astype(str)
     
-    print(f"Creating {table_prefix}_per_game table...")
+    logger.info(f"Creating {table_prefix}_per_game table...")
     per_game_df.to_sql(f'{table_prefix}_per_game', conn.engine, if_exists='replace', index=False, method='multi')
     
     return (df, per_game_df)
@@ -162,21 +166,21 @@ try:
     conn = engine.connect()
     if conn is None:
         raise Exception("Failed to create database connection.")
-    logging.info("Successfully connected to the database.")
+    logger.error("Successfully connected to the database.")
     
     # Process standard hitters dataset
-    print("\n=== PROCESSING STANDARD HITTERS DATASET ===")
+    logger.info("\n=== PROCESSING STANDARD HITTERS DATASET ===")
     hitter_columns = check_csv_columns(hitter_file)
     if not hitter_columns:
-        print("Error with hitter file, exiting.")
+        logger.error("Error with hitter file, exiting.")
         exit(1)
     
     hitter_name_col = determine_name_column(hitter_columns, "hitter")
     if not hitter_name_col:
-        print("ERROR: Could not identify name column in hitter CSV file.")
+        logger.error("ERROR: Could not identify name column in hitter CSV file.")
         exit(1)
         
-    print(f"Reading {hitter_file}...")
+    logger.info(f"Reading {hitter_file}...")
     hitters = pd.read_csv(hitter_file)
     hitters.columns = hitters.columns.str.lower()  # Convert CSV columns to lowercase
     
@@ -194,23 +198,23 @@ try:
             elif req_col == 'triples' and '3b' in hitters.columns:
                 hitter_col_map['triples'] = '3b'  # Map '3B' to 'triple'
             else:
-                print(f"WARNING: Missing required hitter column: {req_col}")
+                logger.info(f"WARNING: Missing required hitter column: {req_col}")
                 
     hitters_result = process_dataset(hitters, hitter_name_col, "hitters", conn, hitter_col_map)
     
     # Process standard pitchers dataset
-    print("\n=== PROCESSING STANDARD PITCHERS DATASET ===")
+    logger.info("\n=== PROCESSING STANDARD PITCHERS DATASET ===")
     pitcher_columns = check_csv_columns(pitcher_file)
     if not pitcher_columns:
-        print("Error with pitcher file, exiting.")
+        logger.error("Error with pitcher file, exiting.")
         exit(1)
     
     pitcher_name_col = determine_name_column(pitcher_columns, "pitcher")
     if not pitcher_name_col:
-        print("ERROR: Could not identify name column in pitcher CSV file.")
+        logger.error("ERROR: Could not identify name column in pitcher CSV file.")
         exit(1)
         
-    print(f"Reading {pitcher_file}...")
+    logger.info(f"Reading {pitcher_file}...")
     pitchers = pd.read_csv(pitcher_file)
     pitchers.columns = pitchers.columns.str.lower()  # Convert CSV columns to lowercase
     
@@ -223,22 +227,22 @@ try:
             elif req_col == 'sv' and 's' in pitchers.columns:
                 pitcher_col_map['sv'] = 's'
             else:
-                print(f"WARNING: Missing required pitcher column: {req_col}")
+                logger.info(f"WARNING: Missing required pitcher column: {req_col}")
                 
     pitchers_result = process_dataset(pitchers, pitcher_name_col, "pitchers", conn, pitcher_col_map, is_pitcher=True)
     
     # Process hitters vs RHP dataset
-    print("\n=== PROCESSING HITTERS VS RHP DATASET ===")
+    logger.info("\n=== PROCESSING HITTERS VS RHP DATASET ===")
     if os.path.exists(hitter_vs_rhp_file):
         hitter_vs_rhp_columns = check_csv_columns(hitter_vs_rhp_file)
         if not hitter_vs_rhp_columns:
-            print("Error with hitter vs RHP file, skipping.")
+            logger.error("Error with hitter vs RHP file, skipping.")
         else:
             hitter_vs_rhp_name_col = determine_name_column(hitter_vs_rhp_columns, "hitter")
             if not hitter_vs_rhp_name_col:
-                print("ERROR: Could not identify name column in hitter vs RHP CSV file, skipping.")
+                logger.error("ERROR: Could not identify name column in hitter vs RHP CSV file, skipping.")
             else:
-                print(f"Reading {hitter_vs_rhp_file}...")
+                logger.info(f"Reading {hitter_vs_rhp_file}...")
                 hitters_vs_rhp = pd.read_csv(hitter_vs_rhp_file)
                 hitters_vs_rhp.columns = hitters_vs_rhp.columns.str.lower()  # Convert CSV columns to lowercase
                 
@@ -254,24 +258,24 @@ try:
                         elif req_col == 'triples' and '3b' in hitters_vs_rhp.columns:
                             hitter_vs_rhp_col_map['triples'] = '3b'
                         else:
-                            print(f"WARNING: Missing required hitter vs RHP column: {req_col}")
+                            logger.error(f"WARNING: Missing required hitter vs RHP column: {req_col}")
                 
                 hitters_vs_rhp_result = process_dataset(hitters_vs_rhp, hitter_vs_rhp_name_col, "hitters_vs_rhp", conn, hitter_vs_rhp_col_map)
     else:
-        print(f"Hitter vs RHP file not found: {hitter_vs_rhp_file}")
+        logger.error(f"Hitter vs RHP file not found: {hitter_vs_rhp_file}")
     
     # Process hitters vs LHP dataset
-    print("\n=== PROCESSING HITTERS VS LHP DATASET ===")
+    logger.info("\n=== PROCESSING HITTERS VS LHP DATASET ===")
     if os.path.exists(hitter_vs_lhp_file):
         hitter_vs_lhp_columns = check_csv_columns(hitter_vs_lhp_file)
         if not hitter_vs_lhp_columns:
-            print("Error with hitter vs LHP file, skipping.")
+            logger.error("Error with hitter vs LHP file, skipping.")
         else:
             hitter_vs_lhp_name_col = determine_name_column(hitter_vs_lhp_columns, "hitter")
             if not hitter_vs_lhp_name_col:
-                print("ERROR: Could not identify name column in hitter vs LHP CSV file, skipping.")
+                logger.error("ERROR: Could not identify name column in hitter vs LHP CSV file, skipping.")
             else:
-                print(f"Reading {hitter_vs_lhp_file}...")
+                logger.info(f"Reading {hitter_vs_lhp_file}...")
                 hitters_vs_lhp = pd.read_csv(hitter_vs_lhp_file)
                 hitters_vs_lhp.columns = hitters_vs_lhp.columns.str.lower()  # Convert CSV columns to lowercase
                 
@@ -287,16 +291,16 @@ try:
                         elif req_col == 'triples' and '3b' in hitters_vs_lhp.columns:
                             hitter_vs_lhp_col_map['triples'] = '3b'
                         else:
-                            print(f"WARNING: Missing required hitter vs LHP column: {req_col}")
+                            logger.info(f"WARNING: Missing required hitter vs LHP column: {req_col}")
                 
                 hitters_vs_lhp_result = process_dataset(hitters_vs_lhp, hitter_vs_lhp_name_col, "hitters_vs_lhp", conn, hitter_vs_lhp_col_map)
     else:
-        print(f"Hitter vs LHP file not found: {hitter_vs_lhp_file}")
+        logger.info(f"Hitter vs LHP file not found: {hitter_vs_lhp_file}")
     
-    print("\nAll projections have been freshly imported and generated in 'mlb_sorare.db'.")
+    logger.info("\nAll projections have been freshly imported and generated in 'mlb_sorare.db'.")
 
 except Exception as e:
-    logging.error(f"An error occurred: {e}")
+    logger.error(f"An error occurred: {e}")
     if conn:
         conn.rollback()
 finally:
