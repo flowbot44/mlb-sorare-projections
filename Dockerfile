@@ -27,13 +27,6 @@ ENV CHROME_BIN=/usr/bin/chromium
 ENV CHROMEDRIVER_PATH=/usr/bin/chromedriver
 ENV SELENIUM_HEADLESS=true
 
-# Create directories
-RUN mkdir -p /app/lineups
-RUN mkdir -p /app/database
-
-# Set permissions that will apply to mounted volumes
-RUN chmod -R 777 /app/database /app/lineups
-
 # Expose the port the app runs on
 EXPOSE 5000
 

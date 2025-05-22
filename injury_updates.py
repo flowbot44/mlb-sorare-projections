@@ -1,60 +1,95 @@
-import sqlite3
+import os
 import requests
-from utils import normalize_name, DATABASE_FILE  # Import the normalization function
+# Ensure get_db_connection and normalize_name are imported from utils
+# It is critical that utils.py's get_db_connection now returns a psycopg2 connection
+from utils import normalize_name, get_db_connection
 
-
+# Define the API URL for injury data
 api_url = "https://site.api.espn.com/apis/site/v2/sports/baseball/mlb/injuries"
 
 def fetch_injury_data():
-    response = requests.get(api_url)
-    if response.status_code == 200:
+    """
+    Fetches MLB injury data from the ESPN API.
+    """
+    try:
+        response = requests.get(api_url)
+        response.raise_for_status()  # Raise an HTTPError for bad responses (4xx or 5xx)
         return response.json()
-    else:
-        print("Failed to fetch injury data")
+    except requests.exceptions.RequestException as e:
+        print(f"Failed to fetch injury data: {e}")
         return None
 
 def update_database(data):
-    conn = sqlite3.connect(DATABASE_FILE)
-    cursor = conn.cursor()
-    
-    cursor.execute("DROP TABLE IF EXISTS injuries")  # Drop the table if it exists
+    """
+    Updates the 'injuries' table in the database with fetched injury data.
+    """
+    if not data:
+        print("No injury data to update.")
+        return
 
-    cursor.execute("""CREATE TABLE IF NOT EXISTS injuries (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            player_name TEXT,
-            team TEXT,
-            status TEXT,
-            description TEXT,
-            long_description TEXT,
-            return_estimate TEXT
-        )
-    """)
-    
-    cursor.execute("DELETE FROM injuries")  # Clear old data before updating
-    
-    for team in data.get("injuries", []):
-        team_name = team.get("team", {}).get("name", "Unknown Team")
-        for injury in team.get("injuries", []):
-            player_name = normalize_name(injury.get("athlete", {}).get("displayName", "Unknown Player"))  # Normalize here
-            status = injury.get("status", "Unknown Status")
-            description = injury.get("shortComment", "No details available")
-            long_description = injury.get("longComment", "No long description available")
-            return_estimate = injury.get("details", {}).get("returnDate", "No estimated return date")
-            
-            cursor.execute("""INSERT INTO injuries (player_name, team, status, description, long_description, return_estimate)
-                VALUES (?, ?, ?, ?, ?, ?)
-            """, (player_name, team_name, status, description, long_description, return_estimate))
-    
-    conn.commit()
-    conn.close()
+    # Use the utility function to get the database connection
+    # This connection object is expected to be a psycopg2 connection
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    try:
+        # Drop the table if it exists
+        # This is generally fine for temporary or frequently updated tables like injuries
+        cursor.execute("DROP TABLE IF EXISTS injuries")
+
+        # Create the 'injuries' table
+        # Changed INTEGER PRIMARY KEY AUTOINCREMENT to SERIAL PRIMARY KEY for PostgreSQL
+        cursor.execute("""CREATE TABLE IF NOT EXISTS injuries (
+                id SERIAL PRIMARY KEY, -- PostgreSQL auto-incrementing primary key
+                player_name TEXT,
+                team TEXT,
+                status TEXT,
+                description TEXT,
+                long_description TEXT,
+                return_estimate TEXT
+            )
+        """)
+
+        # Clear old data before updating (redundant if table is dropped, but good for other scenarios)
+        # If you remove DROP TABLE, keep this. If you keep DROP TABLE, this is optional.
+        # Given DROP TABLE, this line can be removed as the table is fresh.
+        # cursor.execute("DELETE FROM injuries")
+
+        for team in data.get("injuries", []):
+            team_name = team.get("team", {}).get("name", "Unknown Team")
+            for injury in team.get("injuries", []):
+                player_name = normalize_name(injury.get("athlete", {}).get("displayName", "Unknown Player"))
+                status = injury.get("status", "Unknown Status")
+                description = injury.get("shortComment", "No details available")
+                long_description = injury.get("longComment", "No long description available")
+                return_estimate = injury.get("details", {}).get("returnDate", "No estimated return date")
+
+                # The %s placeholders are correct for psycopg2
+                cursor.execute("""INSERT INTO injuries (player_name, team, status, description, long_description, return_estimate)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                """, (player_name, team_name, status, description, long_description, return_estimate))
+
+        conn.commit() # Commit changes to the database
+
+    except Exception as e:
+        print(f"An error occurred during database update: {e}")
+        conn.rollback() # Rollback in case of error
+    finally:
+        cursor.close()
+        conn.close() # Always close the connection
 
 def main():
+    """
+    Main function to fetch injury data and update the database.
+    """
+    print("Fetching injury data...")
     data = fetch_injury_data()
     if data:
+        print("Updating database with injury data...")
         update_database(data)
-        print("Database updated with injury data.")
+        print("Database updated with injury information.")
     else:
-        print("No data to update.")
+        print("Could not fetch injury data. Database not updated.")
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()

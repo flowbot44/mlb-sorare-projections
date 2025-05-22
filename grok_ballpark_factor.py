@@ -1,5 +1,4 @@
 import os
-import sqlite3
 import requests
 import pandas as pd
 from datetime import datetime, timedelta, date
@@ -7,12 +6,12 @@ import pytz
 from utils import (
     normalize_name, 
     determine_game_week, 
-    DATABASE_FILE,
     get_wind_effect,
     get_wind_effect_label,
     get_temp_adjustment,
     wind_dir_to_degrees,
-    get_platoon_start_side_by_mlbamid
+    get_platoon_start_side_by_mlbamid,
+    get_db_connection
 )
 import math
 
@@ -27,39 +26,54 @@ DAY_TO_DAY_REDUCTION = 0.5
 
 # --- Database Initialization ---
 def init_db():
-    conn = sqlite3.connect(DATABASE_FILE)
+    conn = get_db_connection()
     c = conn.cursor()
     
-    # Create or update tables
-    c.execute('''CREATE TABLE IF NOT EXISTS Stadiums 
+    # Create or update tables - PostgreSQL syntax
+    c.execute('''CREATE TABLE IF NOT EXISTS stadiums 
                  (id INTEGER PRIMARY KEY, name TEXT, lat REAL, lon REAL, orientation REAL, is_dome INTEGER)''')
-    c.execute('DROP TABLE IF EXISTS Games')
-    c.execute('''CREATE TABLE IF NOT EXISTS Games 
+    
+    c.execute('DROP TABLE IF EXISTS games CASCADE')
+    c.execute('''CREATE TABLE IF NOT EXISTS games 
                  (id INTEGER PRIMARY KEY, date TEXT, time TEXT, stadium_id INTEGER, 
                   home_team_id INTEGER, away_team_id INTEGER,
                   home_probable_pitcher_id TEXT, away_probable_pitcher_id TEXT, 
                   wind_effect_label TEXT, local_date TEXT)''')
-    c.execute('DROP TABLE IF EXISTS WeatherForecasts')
-    c.execute('''CREATE TABLE IF NOT EXISTS WeatherForecasts 
-                 (id INTEGER PRIMARY KEY AUTOINCREMENT, game_id INTEGER, 
+    
+    c.execute('DROP TABLE IF EXISTS weather_forecasts CASCADE')
+    c.execute('''CREATE TABLE IF NOT EXISTS weather_forecasts 
+                 (id SERIAL PRIMARY KEY, game_id INTEGER, 
                   wind_dir REAL, wind_speed REAL, temp REAL, rain REAL, timestamp TEXT)''')
-    c.execute('DROP TABLE IF EXISTS AdjustedProjections')
-    c.execute('''CREATE TABLE IF NOT EXISTS AdjustedProjections 
-                (id INTEGER PRIMARY KEY AUTOINCREMENT, player_name TEXT, mlbam_id TEXT,
+    
+    c.execute('DROP TABLE IF EXISTS adjusted_projections CASCADE')
+    c.execute('''CREATE TABLE IF NOT EXISTS adjusted_projections 
+                (id SERIAL PRIMARY KEY, player_name TEXT, mlbam_id TEXT,
                  game_id INTEGER, game_date TEXT, sorare_score REAL, team_id INTEGER, game_week TEXT)''')
-    c.execute('DROP TABLE IF EXISTS PlayerTeams')
-    c.execute('''CREATE TABLE IF NOT EXISTS PlayerTeams 
-             (id INTEGER PRIMARY KEY AUTOINCREMENT, player_id TEXT, 
+    
+    c.execute('DROP TABLE IF EXISTS player_teams CASCADE')
+    c.execute('''CREATE TABLE IF NOT EXISTS player_teams 
+             (id SERIAL PRIMARY KEY, player_id TEXT, 
               player_name TEXT, team_id INTEGER, mlbam_id TEXT)''')
-        # Create new table for player handedness
-    c.execute('''CREATE TABLE IF NOT EXISTS PlayerHandedness 
-                 (id INTEGER PRIMARY KEY AUTOINCREMENT, 
+    
+    # Create new table for player handedness
+    c.execute('''CREATE TABLE IF NOT EXISTS player_handedness 
+                 (id SERIAL PRIMARY KEY, 
                   player_id TEXT, 
                   mlbam_id TEXT,
                   player_name TEXT, 
                   bats TEXT, 
                   throws TEXT,
                   last_updated TEXT)''')
+ 
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS platoon_players (
+            id SERIAL PRIMARY KEY, -- Changed from INTEGER PRIMARY KEY AUTOINCREMENT
+            name TEXT NOT NULL,
+            mlbam_id INTEGER NOT NULL UNIQUE, -- Added UNIQUE constraint
+            starts_vs TEXT CHECK(starts_vs IN ('R', 'L'))
+        )
+    ''')
+ 
     
     conn.commit()
     return conn
@@ -118,15 +132,27 @@ def get_schedule(conn, start_date, end_date):
             home_pitcher = game['teams']['home'].get('probablePitcher', {}).get('id', None)
             away_pitcher = game['teams']['away'].get('probablePitcher', {}).get('id', None)
             
-            c.execute("INSERT OR IGNORE INTO Stadiums (id, name) VALUES (?, ?)",
-                      (stadium_id, game['venue']['name']))
+            # PostgreSQL uses ON CONFLICT instead of INSERT OR IGNORE
+            c.execute("""
+                INSERT INTO stadiums (id, name) VALUES (%s, %s)
+                ON CONFLICT (id) DO NOTHING
+            """, (stadium_id, game['venue']['name']))
             
             # Updated to include local_date column
             c.execute("""
-                INSERT OR REPLACE INTO Games 
+                INSERT INTO games 
                 (id, date, time, stadium_id, home_team_id, away_team_id, 
                  home_probable_pitcher_id, away_probable_pitcher_id, local_date) 
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (id) DO UPDATE SET
+                    date = EXCLUDED.date,
+                    time = EXCLUDED.time,
+                    stadium_id = EXCLUDED.stadium_id,
+                    home_team_id = EXCLUDED.home_team_id,
+                    away_team_id = EXCLUDED.away_team_id,
+                    home_probable_pitcher_id = EXCLUDED.home_probable_pitcher_id,
+                    away_probable_pitcher_id = EXCLUDED.away_probable_pitcher_id,
+                    local_date = EXCLUDED.local_date
             """, (game_id, game_date, game_time, stadium_id, home_team_id, away_team_id,
                   str(home_pitcher) if home_pitcher else None, 
                   str(away_pitcher) if away_pitcher else None,
@@ -138,18 +164,20 @@ def get_schedule(conn, start_date, end_date):
 def populate_player_teams(conn, start_date, end_date, update_rosters=False):
     c = conn.cursor()
     if not update_rosters:
-        existing_count = c.execute("SELECT COUNT(*) FROM PlayerTeams").fetchone()[0]
+        c.execute("SELECT COUNT(*) FROM player_teams")
+        existing_count = c.fetchone()[0]
         if existing_count > 0:
             print("Using cached roster data.")
             return
         print("No cached roster data found; fetching rosters...")
     
     print("Updating roster data...")
-    c.execute("DELETE FROM PlayerTeams")
+    c.execute("DELETE FROM player_teams")
     
     teams = set()
-    games = c.execute("SELECT home_team_id, away_team_id FROM Games WHERE local_date BETWEEN ? AND ?",
-                      (start_date, end_date)).fetchall()
+    c.execute("SELECT home_team_id, away_team_id FROM games WHERE local_date BETWEEN %s AND %s",
+              (start_date, end_date))
+    games = c.fetchall()
     for home_team_id, away_team_id in games:
         teams.add(home_team_id)
         teams.add(away_team_id)
@@ -166,9 +194,12 @@ def populate_player_teams(conn, start_date, end_date, update_rosters=False):
                 player_id = str(player['person']['id'])  # This is the MLBAMID
                 player_name = normalize_name(player['person']['fullName'])
                 
-                # Insert into PlayerTeams table
-                c.execute("INSERT OR IGNORE INTO PlayerTeams (player_id, player_name, team_id, mlbam_id) VALUES (?, ?, ?, ?)",
-                        (player_id, player_name, team_id, player_id))
+                # Insert into player_teams table
+                c.execute("""
+                    INSERT INTO player_teams (player_id, player_name, team_id, mlbam_id) 
+                    VALUES (%s, %s, %s, %s)
+                    ON CONFLICT DO NOTHING
+                """, (player_id, player_name, team_id, player_id))
                 
                 # Extract handedness data
                 if 'person' in player:
@@ -177,22 +208,22 @@ def populate_player_teams(conn, start_date, end_date, update_rosters=False):
                     throws = person_data.get('pitchHand', {}).get('code', 'Unknown')
                     
                     # Check if player already exists in handedness table
-                    existing = c.execute("SELECT id FROM PlayerHandedness WHERE mlbam_id = ?", 
-                                        (player_id,)).fetchone()
+                    c.execute("SELECT id FROM player_handedness WHERE mlbam_id = %s", (player_id,))
+                    existing = c.fetchone()
                     
                     if existing:
                         # Update existing record
                         c.execute("""
-                            UPDATE PlayerHandedness 
-                            SET bats = ?, throws = ?, last_updated = ?
-                            WHERE mlbam_id = ?
+                            UPDATE player_handedness 
+                            SET bats = %s, throws = %s, last_updated = %s
+                            WHERE mlbam_id = %s
                         """, (bats, throws, current_date, player_id))
                     else:
                         # Insert new record
                         c.execute("""
-                            INSERT INTO PlayerHandedness 
+                            INSERT INTO player_handedness 
                             (player_id, mlbam_id, player_name, bats, throws, last_updated)
-                            VALUES (?, ?, ?, ?, ?, ?)
+                            VALUES (%s, %s, %s, %s, %s, %s)
                         """, (player_id, player_id, player_name, bats, throws, current_date))
         except Exception as e:
             print(f"Error fetching roster for team {team_id}: {e}")
@@ -329,20 +360,23 @@ def get_weather_nws(lat, lon, forecast_time):
 def fetch_weather_and_store(conn, start_date, end_date):
     c = conn.cursor()
     
-    # First, modify the WeatherForecasts table if needed to include a timestamp column
-    try:
-        c.execute("SELECT timestamp FROM WeatherForecasts LIMIT 1")
-    except sqlite3.OperationalError:
+    # First, check if the timestamp column exists in weather_forecasts table
+    c.execute("""
+        SELECT column_name FROM information_schema.columns 
+        WHERE table_name = 'weather_forecasts' AND column_name = 'timestamp'
+    """)
+    if not c.fetchone():
         # The timestamp column doesn't exist, so add it
-        c.execute("ALTER TABLE WeatherForecasts ADD COLUMN timestamp TEXT")
+        c.execute("ALTER TABLE weather_forecasts ADD COLUMN timestamp TEXT")
         conn.commit()
-        print("Added timestamp column to WeatherForecasts table")
+        print("Added timestamp column to weather_forecasts table")
     
     # Use local_date for filtering instead of date
-    games = c.execute("""
-        SELECT id, date, time, stadium_id FROM Games 
-        WHERE local_date BETWEEN ? AND ?
-    """, (start_date, end_date)).fetchall()
+    c.execute("""
+        SELECT id, date, time, stadium_id FROM games 
+        WHERE local_date BETWEEN %s AND %s
+    """, (start_date, end_date))
+    games = c.fetchall()
     
     print(f"Found {len(games)} games for weather processing between {start_date} and {end_date}")
     
@@ -358,11 +392,12 @@ def fetch_weather_and_store(conn, start_date, end_date):
         game_id, date, time, stadium_id = game
         
         # Check if this game already has weather data and when it was last updated
-        weather_data = c.execute("""
+        c.execute("""
             SELECT wind_dir, wind_speed, temp, rain, timestamp 
-            FROM WeatherForecasts 
-            WHERE game_id = ?
-        """, (game_id,)).fetchone()
+            FROM weather_forecasts 
+            WHERE game_id = %s
+        """, (game_id,))
+        weather_data = c.fetchone()
         
         needs_update = True
         
@@ -383,7 +418,8 @@ def fetch_weather_and_store(conn, start_date, end_date):
                     # If timestamp is invalid, update the forecast
                     print(f"Invalid timestamp for game {game_id}, refreshing forecast...")
         
-        stadium = c.execute("SELECT lat, lon, is_dome, orientation FROM Stadiums WHERE id = ?", (stadium_id,)).fetchone()
+        c.execute("SELECT lat, lon, is_dome, orientation FROM stadiums WHERE id = %s", (stadium_id,))
+        stadium = c.fetchone()
         if not stadium or stadium[2]:  # Skip if dome or no stadium data
             continue
             
@@ -430,23 +466,23 @@ def fetch_weather_and_store(conn, start_date, end_date):
             if needs_update and weather_data:
                 # Update existing forecast
                 c.execute("""
-                    UPDATE WeatherForecasts 
-                    SET wind_dir = ?, wind_speed = ?, temp = ?, rain = ?, timestamp = ?
-                    WHERE game_id = ?
+                    UPDATE weather_forecasts 
+                    SET wind_dir = %s, wind_speed = %s, temp = %s, rain = %s, timestamp = %s
+                    WHERE game_id = %s
                 """, (weather['wind_dir'], weather['wind_speed'], weather['temp'], 
                      weather['rain'], timestamp, game_id))
                 updated_forecasts += 1
             else:
                 # Insert new forecast
                 c.execute("""
-                    INSERT INTO WeatherForecasts 
+                    INSERT INTO weather_forecasts 
                     (game_id, wind_dir, wind_speed, temp, rain, timestamp) 
-                    VALUES (?, ?, ?, ?, ?, ?)
+                    VALUES (%s, %s, %s, %s, %s, %s)
                 """, (game_id, weather['wind_dir'], weather['wind_speed'], 
                      weather['temp'], weather['rain'], timestamp))
             
             c.execute("""
-                UPDATE Games SET wind_effect_label = ? WHERE id = ?
+                UPDATE games SET wind_effect_label = %s WHERE id = %s
             """, (wind_effect_label, game_id))
         else:
             print(f"Skipping game {game_id} due to API error.")
@@ -525,18 +561,19 @@ def process_hitter(conn, game_data, hitter_data, injuries, game_week_id):
     # Use local_date instead of game_date for game date object
     game_date_obj = datetime.strptime(local_date, '%Y-%m-%d').date()
 
-    player_name = normalize_name(hitter_data.get("Name"))
-    mlbam_id = hitter_data.get("MLBAMID")
+    player_name = normalize_name(hitter_data.get("name"))
+    mlbam_id = hitter_data.get("mlbamid")
     
     if not player_name:
         print(f"Warning: Null Name for hitter in game {game_id}")
         return
 
-    player_team_id = hitter_data.get("TeamID")
+    player_team_id = hitter_data.get("teamid")
     if not player_team_id and mlbam_id:
         # Look up team ID by MLBAMID if not directly available
         c = conn.cursor()
-        team_result = c.execute("SELECT team_id FROM PlayerTeams WHERE mlbam_id = ?", (mlbam_id,)).fetchone()
+        c.execute("SELECT team_id FROM player_teams WHERE mlbam_id = %s", (mlbam_id,))
+        team_result = c.fetchone()
         if team_result:
             player_team_id = team_result[0]
     
@@ -550,19 +587,22 @@ def process_hitter(conn, game_data, hitter_data, injuries, game_week_id):
     unique_player_key = mlbam_id if mlbam_id else f"{player_name}_{player_team_id}"
     
     c = conn.cursor()
-    stadium_data = c.execute("""
+    c.execute("""
         SELECT s.is_dome, s.orientation, w.wind_dir, w.wind_speed, w.temp 
-        FROM Stadiums s 
-        LEFT JOIN WeatherForecasts w ON w.game_id = ?
-        WHERE s.id = ?
-    """, (game_id, stadium_id)).fetchone()
+        FROM stadiums s 
+        LEFT JOIN weather_forecasts w ON w.game_id = %s
+        WHERE s.id = %s
+    """, (game_id, stadium_id))
+    stadium_data = c.fetchone()
 
     if not stadium_data:
         is_dome, orientation, wind_dir, wind_speed, temp = (0, 0, 0, 0, 70)
     else:
         is_dome, orientation, wind_dir, wind_speed, temp = stadium_data
 
-    park_factors = {row[0]: row[1] / 100 for row in c.execute("SELECT factor_type, value FROM ParkFactors WHERE stadium_id = ?", (stadium_id,)).fetchall()}
+    c.execute("SELECT factor_type, value FROM park_factors WHERE stadium_id = %s", (stadium_id,))
+    park_factor_rows = c.fetchall()
+    park_factors = {row[0]: row[1] / 100 for row in park_factor_rows}
     
     if not park_factors:
         print(f"park not found {stadium_id}")
@@ -570,10 +610,11 @@ def process_hitter(conn, game_data, hitter_data, injuries, game_week_id):
 
     # --- NEW: Determine opposing pitcher and their handedness ---
     # Get game information to find opposing pitcher
-    game_info = c.execute("""
+    c.execute("""
         SELECT home_probable_pitcher_id, away_probable_pitcher_id
-        FROM Games WHERE id = ?
-    """, (game_id,)).fetchone()
+        FROM games WHERE id = %s
+    """, (game_id,))
+    game_info = c.fetchone()
 
     opposing_pitcher_id = None
     if game_info:
@@ -595,28 +636,31 @@ def process_hitter(conn, game_data, hitter_data, injuries, game_week_id):
 
     if pitcher_handedness == 'L':
         # Use hitters_vs_lhp_per_game
-        hitter_specific = c.execute("""
-            SELECT R_per_game, RBI_per_game, "1B_per_game", "2B_per_game", "3B_per_game", HR_per_game,
-                   BB_per_game, K_per_game, SB_per_game, CS_per_game, HBP_per_game
+        c.execute("""
+            SELECT r_per_game, rbi_per_game, singles_per_game, doubles_per_game, triples_per_game, hr_per_game,
+                   bb_per_game, k_per_game, sb_per_game, cs_per_game, hbp_per_game
             FROM hitters_vs_lhp_per_game
-            WHERE MLBAMID = ? OR Name = ?
-        """, (mlbam_id, player_name)).fetchone()
+            WHERE mlbamid = %s OR name = %s
+        """, (mlbam_id, player_name))
+        hitter_specific = c.fetchone()
     elif pitcher_handedness == 'R':
         # Use hitters_vs_rhp_per_game
-        hitter_specific = c.execute("""
-            SELECT R_per_game, RBI_per_game, "1B_per_game", "2B_per_game", "3B_per_game", HR_per_game,
-                   BB_per_game, K_per_game, SB_per_game, CS_per_game, HBP_per_game
+        c.execute("""
+            SELECT r_per_game, rbi_per_game, singles_per_game, doubles_per_game, triples_per_game, hr_per_game,
+                   bb_per_game, k_per_game, sb_per_game, cs_per_game, hbp_per_game
             FROM hitters_vs_rhp_per_game
-            WHERE MLBAMID = ? OR Name = ?
-        """, (mlbam_id, player_name)).fetchone()
+            WHERE mlbamid = %s OR name = %s
+        """, (mlbam_id, player_name))
+        hitter_specific = c.fetchone()
     else:
         # Fallback to hitters_per_game
-        hitter_specific = c.execute("""
-            SELECT R_per_game, RBI_per_game, "1B_per_game", "2B_per_game", "3B_per_game", HR_per_game,
-                   BB_per_game, K_per_game, SB_per_game, CS_per_game, HBP_per_game
+        c.execute("""
+            SELECT r_per_game, rbi_per_game, singles_per_game, doubles_per_game, triples_per_game, hr_per_game,
+                   bb_per_game, k_per_game, sb_per_game, cs_per_game, hbp_per_game
             FROM hitters_per_game
-            WHERE MLBAMID = ? OR Name = ?
-        """, (mlbam_id, player_name)).fetchone()
+            WHERE mlbamid = %s OR name = %s
+        """, (mlbam_id, player_name))
+        hitter_specific = c.fetchone()
 
     # Populate base_stats with data from the selected table
     if hitter_specific:
@@ -652,24 +696,25 @@ def process_hitter(conn, game_data, hitter_data, injuries, game_week_id):
     injury_data = injuries.get(unique_player_key, injuries.get(player_name, {'status': 'Active', 'return_estimate': None}))    
     final_score = adjust_score_for_injury(handedness_adjusted_score, injury_data['status'], injury_data['return_estimate'], game_date_obj)
 
-    existing = c.execute("""
-        SELECT id FROM AdjustedProjections 
-        WHERE (player_name = ? AND game_id = ? AND team_id = ?) OR
-            (mlbam_id = ? AND game_id = ?)
-    """, (player_name, game_id, player_team_id, mlbam_id, game_id)).fetchone()
+    c.execute("""
+        SELECT id FROM adjusted_projections 
+        WHERE (player_name = %s AND game_id = %s AND team_id = %s) OR
+            (mlbam_id = %s AND game_id = %s)
+    """, (player_name, game_id, player_team_id, mlbam_id, game_id))
+    existing = c.fetchone()
 
     if existing:
         c.execute("""
-            UPDATE AdjustedProjections 
-            SET sorare_score = ?, game_date = ?
-            WHERE (player_name = ? AND game_id = ? AND team_id = ?) OR
-                (mlbam_id = ? AND game_id = ?)
+            UPDATE adjusted_projections 
+            SET sorare_score = %s, game_date = %s
+            WHERE (player_name = %s AND game_id = %s AND team_id = %s) OR
+                (mlbam_id = %s AND game_id = %s)
         """, (final_score, local_date, player_name, game_id, player_team_id, mlbam_id, game_id))
     else:
         c.execute("""
-            INSERT INTO AdjustedProjections 
+            INSERT INTO adjusted_projections 
             (player_name, mlbam_id, game_id, game_date, sorare_score, game_week, team_id) 
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
         """, (player_name, mlbam_id, game_id, local_date, final_score, game_week_id, player_team_id))
 
 
@@ -680,18 +725,19 @@ def process_pitcher(conn, game_data, pitcher_data, injuries, game_week_id, is_st
     # Use local_date instead of game_date for game date object
     game_date_obj = datetime.strptime(local_date, '%Y-%m-%d').date()
 
-    player_name = normalize_name(pitcher_data.get("Name"))
-    mlbam_id = pitcher_data.get("MLBAMID")
+    player_name = normalize_name(pitcher_data.get("name"))
+    mlbam_id = pitcher_data.get("mlbamid")
     
     if not player_name:
         print(f"Warning: Null Name for pitcher in game {game_id}")
         return
 
-    player_team_id = pitcher_data.get("TeamID")
+    player_team_id = pitcher_data.get("teamid")
     if not player_team_id and mlbam_id:
         # Look up team ID by MLBAMID if not directly available
         c = conn.cursor()
-        team_result = c.execute("SELECT team_id FROM PlayerTeams WHERE mlbam_id = ?", (mlbam_id,)).fetchone()
+        c.execute("SELECT team_id FROM player_teams WHERE mlbam_id = %s", (mlbam_id,))
+        team_result = c.fetchone()
         if team_result:
             player_team_id = team_result[0]
             
@@ -705,7 +751,7 @@ def process_pitcher(conn, game_data, pitcher_data, injuries, game_week_id, is_st
     unique_player_key = mlbam_id if mlbam_id else f"{player_name}_{player_team_id}"
     
     # Determine if pitcher is generally a starter (projects to 2+ innings per game)
-    innings_per_game = pitcher_data.get('IP_per_game', 0)
+    innings_per_game = pitcher_data.get('ip_per_game', 0)
     is_generally_starter = innings_per_game > 2.0
     
     # If pitcher is generally a starter but not starting in this game, set score to 0
@@ -713,34 +759,36 @@ def process_pitcher(conn, game_data, pitcher_data, injuries, game_week_id, is_st
         c = conn.cursor()
         
         # Check if this player already has a projection for this game
-        existing = c.execute("""
-            SELECT id FROM AdjustedProjections 
-            WHERE (player_name = ? AND game_id = ? AND team_id = ?) OR
-                (mlbam_id = ? AND game_id = ?)
-        """, (player_name, game_id, player_team_id, mlbam_id, game_id)).fetchone()
+        c.execute("""
+            SELECT id FROM adjusted_projections 
+            WHERE (player_name = %s AND game_id = %s AND team_id = %s) OR
+                (mlbam_id = %s AND game_id = %s)
+        """, (player_name, game_id, player_team_id, mlbam_id, game_id))
+        existing = c.fetchone()
         final_score = 0.0
         if existing:
             c.execute("""
-                UPDATE AdjustedProjections 
-                SET sorare_score = ?, game_date = ?
-                WHERE (player_name = ? AND game_id = ? AND team_id = ?) OR
-                    (mlbam_id = ? AND game_id = ?)
+                UPDATE adjusted_projections 
+                SET sorare_score = %s, game_date = %s
+                WHERE (player_name = %s AND game_id = %s AND team_id = %s) OR
+                    (mlbam_id = %s AND game_id = %s)
             """, (final_score, local_date, player_name, game_id, player_team_id, mlbam_id, game_id))
         else:
             c.execute("""
-                INSERT INTO AdjustedProjections 
+                INSERT INTO adjusted_projections 
                 (player_name, mlbam_id, game_id, game_date, sorare_score, game_week, team_id) 
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
             """, (player_name, mlbam_id, game_id, local_date, final_score, game_week_id, player_team_id))
         return
     
     c = conn.cursor()
-    stadium_data = c.execute("""
+    c.execute("""
         SELECT s.is_dome, s.orientation, w.wind_dir, w.wind_speed, w.temp 
-        FROM Stadiums s 
-        LEFT JOIN WeatherForecasts w ON w.game_id = ?
-        WHERE s.id = ?
-    """, (game_id, stadium_id)).fetchone()
+        FROM stadiums s 
+        LEFT JOIN weather_forecasts w ON w.game_id = %s
+        WHERE s.id = %s
+    """, (game_id, stadium_id))
+    stadium_data = c.fetchone()
     
     if not stadium_data:
         print(f"No stadium data for game {game_id} with stadium_id {stadium_id}")
@@ -748,21 +796,23 @@ def process_pitcher(conn, game_data, pitcher_data, injuries, game_week_id, is_st
     else:
         is_dome, orientation, wind_dir, wind_speed, temp = stadium_data
     
-    park_factors = {row[0]: row[1] / 100 for row in c.execute("SELECT factor_type, value FROM ParkFactors WHERE stadium_id = ?", (stadium_id,)).fetchall()}
+    c.execute("SELECT factor_type, value FROM park_factors WHERE stadium_id = %s", (stadium_id,))
+    park_factor_rows = c.fetchall()
+    park_factors = {row[0]: row[1] / 100 for row in park_factor_rows}
     if not park_factors:
         print(f"No park factors for stadium_id {stadium_id}, using default 1.0")
         park_factors = {'IP': 1.0, 'SO': 1.0, 'H': 1.0, 'ER': 1.0, 'BB': 1.0, 'HBP': 1.0, 'W': 1.0, 'SV': 1.0}
     
     base_stats = {
         'IP': innings_per_game,
-        'SO': pitcher_data.get('K_per_game', 0),
-        'H': pitcher_data.get('H_per_game', 0),
-        'ER': pitcher_data.get('ER_per_game', 0),
-        'BB': pitcher_data.get('BB_per_game', 0),
-        'HBP': pitcher_data.get('HBP_per_game', 0),
-        'W': pitcher_data.get('W_per_game', 0),
-        'HLD': pitcher_data.get('HLD_per_game', 0),
-        'S': pitcher_data.get('S_per_game', 0),
+        'SO': pitcher_data.get('k_per_game', 0),
+        'H': pitcher_data.get('h_per_game', 0),
+        'ER': pitcher_data.get('er_per_game', 0),
+        'BB': pitcher_data.get('bb_per_game', 0),
+        'HBP': pitcher_data.get('hbp_per_game', 0),
+        'W': pitcher_data.get('w_per_game', 0),
+        'HLD': pitcher_data.get('hld_per_game', 0),
+        'S': pitcher_data.get('s_per_game', 0),
         'RA': not is_starter
     }
     
@@ -782,40 +832,42 @@ def process_pitcher(conn, game_data, pitcher_data, injuries, game_week_id, is_st
     final_score = adjust_score_for_injury(handedness_adjusted_score, injury_data['status'], injury_data['return_estimate'], game_date_obj)
 
     # Check if this player already has a projection for this game
-    existing = c.execute("""
-        SELECT id FROM AdjustedProjections 
-        WHERE (player_name = ? AND game_id = ? AND team_id = ?) OR
-            (mlbam_id = ? AND game_id = ?)
-    """, (player_name, game_id, player_team_id, mlbam_id, game_id)).fetchone()
+    c.execute("""
+        SELECT id FROM adjusted_projections 
+        WHERE (player_name = %s AND game_id = %s AND team_id = %s) OR
+            (mlbam_id = %s AND game_id = %s)
+    """, (player_name, game_id, player_team_id, mlbam_id, game_id))
+    existing = c.fetchone()
 
     if existing:
         c.execute("""
-            UPDATE AdjustedProjections 
-            SET sorare_score = ?, game_date = ?
-            WHERE (player_name = ? AND game_id = ? AND team_id = ?) OR
-                (mlbam_id = ? AND game_id = ?)
+            UPDATE adjusted_projections 
+            SET sorare_score = %s, game_date = %s
+            WHERE (player_name = %s AND game_id = %s AND team_id = %s) OR
+                (mlbam_id = %s AND game_id = %s)
         """, (final_score, local_date, player_name, game_id, player_team_id, mlbam_id, game_id))
     else:
         c.execute("""
-            INSERT INTO AdjustedProjections 
+            INSERT INTO adjusted_projections 
             (player_name, mlbam_id, game_id, game_date, sorare_score, game_week, team_id) 
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
         """, (player_name, mlbam_id, game_id, local_date, final_score, game_week_id, player_team_id))
 
 def add_projected_starting_pitchers(conn, start_date, end_date):
     """
-    Adds projected starting pitchers to the PlayerTeams table even if they're not on active rosters yet.
+    Adds projected starting pitchers to the player_teams table even if they're not on active rosters yet.
     This will allow the system to use their existing projections from pitchers_per_game.
     Also captures their handedness information.
     """
-    print("Adding projected starting pitchers to PlayerTeams...")
+    print("Adding projected starting pitchers to player_teams...")
     c = conn.cursor()
     
     # Get games in the date range
-    games = c.execute("""
+    c.execute("""
         SELECT id, date, home_team_id, away_team_id, home_probable_pitcher_id, away_probable_pitcher_id 
-        FROM Games WHERE local_date BETWEEN ? AND ?
-    """, (start_date, end_date)).fetchall()
+        FROM games WHERE local_date BETWEEN %s AND %s
+    """, (start_date, end_date))
+    games = c.fetchall()
     
     pitcher_count = 0
     current_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -826,12 +878,12 @@ def add_projected_starting_pitchers(conn, start_date, end_date):
         # Process home and away pitchers
         for pitcher_id, team_id in [(home_pitcher_id, home_team_id), (away_pitcher_id, away_team_id)]:
             if pitcher_id and pitcher_id != 'None':
-                # Check if the pitcher is already in PlayerTeams
-                existing = c.execute("SELECT COUNT(*) FROM PlayerTeams WHERE player_id = ?", 
-                                    (pitcher_id,)).fetchone()[0]
+                # Check if the pitcher is already in player_teams
+                c.execute("SELECT COUNT(*) FROM player_teams WHERE player_id = %s", (pitcher_id,))
+                existing = c.fetchone()[0]
                 
                 if existing == 0:
-                    # Pitcher not in PlayerTeams, fetch their details from MLB API with hydrate=person
+                    # Pitcher not in player_teams, fetch their details from MLB API with hydrate=person
                     try:
                         url = f"https://statsapi.mlb.com/api/v1/people/{pitcher_id}?hydrate=person"
                         response = requests.get(url)
@@ -842,16 +894,17 @@ def add_projected_starting_pitchers(conn, start_date, end_date):
                             player_name = normalize_name(player['fullName'])
                             
                             # Check if this player exists in pitchers_per_game
-                            pitcher_exists = c.execute("""
+                            c.execute("""
                                 SELECT COUNT(*) FROM pitchers_per_game 
-                                WHERE Name = ? OR MLBAMID = ?
-                            """, (player['fullName'], pitcher_id)).fetchone()[0]
+                                WHERE mlbamid = %s
+                            """, (pitcher_id,))
+                            pitcher_exists = c.fetchone()[0]
                             
                             if pitcher_exists > 0:
-                                # Add to the PlayerTeams table to connect them to their stats
+                                # Add to the player_teams table to connect them to their stats
                                 c.execute("""
-                                    INSERT INTO PlayerTeams (player_id, player_name, team_id, mlbam_id)
-                                    VALUES (?, ?, ?, ?)
+                                    INSERT INTO player_teams (player_id, player_name, team_id, mlbam_id)
+                                    VALUES (%s, %s, %s, %s)
                                 """, (str(pitcher_id), player_name, team_id, str(pitcher_id)))
                                 
                                 # Extract handedness data
@@ -859,22 +912,22 @@ def add_projected_starting_pitchers(conn, start_date, end_date):
                                 throws = player.get('pitchHand', {}).get('code', 'Unknown')
                                 
                                 # Check if player already exists in handedness table
-                                existing_hand = c.execute("SELECT id FROM PlayerHandedness WHERE mlbam_id = ?", 
-                                                        (pitcher_id,)).fetchone()
+                                c.execute("SELECT id FROM player_handedness WHERE mlbam_id = %s", (pitcher_id,))
+                                existing_hand = c.fetchone()
                                 
                                 if existing_hand:
                                     # Update existing record
                                     c.execute("""
-                                        UPDATE PlayerHandedness 
-                                        SET bats = ?, throws = ?, last_updated = ?
-                                        WHERE mlbam_id = ?
+                                        UPDATE player_handedness 
+                                        SET bats = %s, throws = %s, last_updated = %s
+                                        WHERE mlbam_id = %s
                                     """, (bats, throws, current_date, pitcher_id))
                                 else:
                                     # Insert new record
                                     c.execute("""
-                                        INSERT INTO PlayerHandedness 
+                                        INSERT INTO player_handedness 
                                         (player_id, mlbam_id, player_name, bats, throws, last_updated)
-                                        VALUES (?, ?, ?, ?, ?, ?)
+                                        VALUES (%s, %s, %s, %s, %s, %s)
                                     """, (str(pitcher_id), str(pitcher_id), player_name, bats, throws, current_date))
                                 
                                 pitcher_count += 1
@@ -883,7 +936,7 @@ def add_projected_starting_pitchers(conn, start_date, end_date):
                         print(f"Error fetching pitcher {pitcher_id} data: {e}")
     
     conn.commit()
-    print(f"Added {pitcher_count} projected starting pitchers to PlayerTeams")
+    print(f"Added {pitcher_count} projected starting pitchers to player_teams")
 
 # --- Updates to the main functions ---
 def calculate_adjustments(conn, start_date, end_date, game_week_id):
@@ -893,11 +946,12 @@ def calculate_adjustments(conn, start_date, end_date, game_week_id):
         end_date = end_date.strftime('%Y-%m-%d')
     
     c = conn.cursor()
-    c.execute("DELETE FROM AdjustedProjections WHERE game_week = ?", (game_week_id,))
+    c.execute("DELETE FROM adjusted_projections WHERE game_week = %s", (game_week_id,))
     
     # Create injury lookup as before
-    basic_injuries = {row[0]: {'status': row[1], 'return_estimate': row[2]} 
-                for row in c.execute("SELECT player_name, status, return_estimate FROM injuries").fetchall()}
+    c.execute("SELECT player_name, status, return_estimate FROM injuries")
+    injury_rows = c.fetchall()
+    basic_injuries = {row[0]: {'status': row[1], 'return_estimate': row[2]} for row in injury_rows}
     
     # Create the team-specific injury entries
     injuries = {}
@@ -906,7 +960,8 @@ def calculate_adjustments(conn, start_date, end_date, game_week_id):
         injuries[player_name] = injury_data
         
         # Add team-specific entries
-        team_results = c.execute("SELECT team_id FROM PlayerTeams WHERE player_name = ?", (player_name,)).fetchall()
+        c.execute("SELECT team_id FROM player_teams WHERE player_name = %s", (player_name,))
+        team_results = c.fetchall()
         for team_result in team_results:
             team_id = team_result[0]
             unique_key = f"{player_name}_{team_id}"
@@ -914,11 +969,12 @@ def calculate_adjustments(conn, start_date, end_date, game_week_id):
 
     
     # Use local_date for filtering instead of date
-    games = c.execute("""
+    c.execute("""
         SELECT id, date, time, stadium_id, home_team_id, away_team_id, 
                home_probable_pitcher_id, away_probable_pitcher_id, local_date
-        FROM Games WHERE local_date BETWEEN ? AND ?
-    """, (start_date, end_date)).fetchall()
+        FROM games WHERE local_date BETWEEN %s AND %s
+    """, (start_date, end_date))
+    games = c.fetchall()
     
     print(f"Found {len(games)} games for projection processing between {start_date} and {end_date}")
     
@@ -931,19 +987,21 @@ def calculate_adjustments(conn, start_date, end_date, game_week_id):
         away_pitcher_name = None
         
         if home_pitcher_id:
-            home_pitcher_result = c.execute("""
-                SELECT player_name FROM PlayerTeams
-                WHERE player_id = ?
-            """, (home_pitcher_id,)).fetchone()
+            c.execute("""
+                SELECT player_name FROM player_teams
+                WHERE player_id = %s
+            """, (home_pitcher_id,))
+            home_pitcher_result = c.fetchone()
             
             if home_pitcher_result:
                 home_pitcher_name = normalize_name(home_pitcher_result[0])
         
         if away_pitcher_id:
-            away_pitcher_result = c.execute("""
-                SELECT player_name FROM PlayerTeams
-                WHERE player_id = ?
-            """, (away_pitcher_id,)).fetchone()
+            c.execute("""
+                SELECT player_name FROM player_teams
+                WHERE player_id = %s
+            """, (away_pitcher_id,))
+            away_pitcher_result = c.fetchone()
             
             if away_pitcher_result:
                 away_pitcher_name = normalize_name(away_pitcher_result[0])
@@ -959,20 +1017,22 @@ def calculate_adjustments(conn, start_date, end_date, game_week_id):
         game_data = game[:6] + (local_date,)
         
         # Process home team hitters
-        home_hitters = c.execute("""
-            SELECT h.*, pt.team_id as TeamID, pt.player_id 
+        c.execute("""
+            SELECT h.*, pt.team_id as teamid, pt.player_id 
             FROM hitters_per_game h
-            LEFT JOIN PlayerTeams pt ON h.MLBAMID = pt.mlbam_id  
-            WHERE pt.team_id = ?
-        """, (home_team_id,)).fetchall()
+            LEFT JOIN player_teams pt ON h.mlbamid = pt.mlbam_id  
+            WHERE pt.team_id = %s
+        """, (home_team_id,))
+        home_hitters = c.fetchall()
         
         # Process away team hitters
-        away_hitters = c.execute("""
-            SELECT h.*, pt.team_id as TeamID, pt.player_id 
+        c.execute("""
+            SELECT h.*, pt.team_id as teamid, pt.player_id 
             FROM hitters_per_game h
-            LEFT JOIN PlayerTeams pt ON h.MLBAMID = pt.mlbam_id  
-            WHERE pt.team_id = ?
-        """, (away_team_id,)).fetchall()
+            LEFT JOIN player_teams pt ON h.mlbamid = pt.mlbam_id  
+            WHERE pt.team_id = %s
+        """, (away_team_id,))
+        away_hitters = c.fetchall()
         
         # Combine home and away hitters
         hitters = home_hitters + away_hitters
@@ -983,20 +1043,22 @@ def calculate_adjustments(conn, start_date, end_date, game_week_id):
             process_hitter(conn, game_data, hitter_dict, injuries, game_week_id)
         
         # Process home team pitchers
-        home_pitchers = c.execute("""
-            SELECT p.*, pt.team_id as TeamID, pt.player_id 
+        c.execute("""
+            SELECT p.*, pt.team_id as teamid, pt.player_id 
             FROM pitchers_per_game p 
-            LEFT JOIN PlayerTeams pt ON p.MLBAMID = pt.mlbam_id 
-            WHERE pt.team_id = ?
-        """, (home_team_id,)).fetchall()
+            LEFT JOIN player_teams pt ON p.mlbamid = pt.mlbam_id 
+            WHERE pt.team_id = %s
+        """, (home_team_id,))
+        home_pitchers = c.fetchall()
         
         # Process away team pitchers
-        away_pitchers = c.execute("""
-            SELECT p.*, pt.team_id as TeamID, pt.player_id 
+        c.execute("""
+            SELECT p.*, pt.team_id as teamid, pt.player_id 
             FROM pitchers_per_game p 
-            LEFT JOIN PlayerTeams pt ON p.MLBAMID = pt.mlbam_id  
-            WHERE pt.team_id = ?
-        """, (away_team_id,)).fetchall()
+            LEFT JOIN player_teams pt ON p.mlbamid = pt.mlbam_id  
+            WHERE pt.team_id = %s
+        """, (away_team_id,))
+        away_pitchers = c.fetchall()
         
         # Combine home and away pitchers
         pitchers = home_pitchers + away_pitchers
@@ -1004,7 +1066,7 @@ def calculate_adjustments(conn, start_date, end_date, game_week_id):
 
         for pitcher in pitchers:
             pitcher_dict = {pitcher_columns[i]: pitcher[i] for i in range(len(pitcher_columns))}
-            player_name = normalize_name(pitcher_dict.get("Name", ""))
+            player_name = normalize_name(pitcher_dict.get("name", ""))
             
             # Skip processing for Ohtani as a pitcher - we'll use his hitter stats only
             if "shohei ohtani" in player_name.lower():
@@ -1052,7 +1114,7 @@ def get_player_handedness(conn, mlbam_id=None, player_name=None):
     Retrieves handedness information for a player by MLBAM ID or name.
     
     Args:
-        conn (sqlite3.Connection): Database connection
+        conn (psycopg2.Connection): Database connection
         mlbam_id (str, optional): Player's MLBAM ID
         player_name (str, optional): Player's name
         
@@ -1062,16 +1124,18 @@ def get_player_handedness(conn, mlbam_id=None, player_name=None):
     c = conn.cursor()
     
     if mlbam_id:
-        result = c.execute("""
-            SELECT bats, throws FROM PlayerHandedness
-            WHERE mlbam_id = ?
-        """, (str(mlbam_id),)).fetchone()
+        c.execute("""
+            SELECT bats, throws FROM player_handedness
+            WHERE mlbam_id = %s
+        """, (str(mlbam_id),))
+        result = c.fetchone()
     elif player_name:
         normalized_name = normalize_name(player_name)
-        result = c.execute("""
-            SELECT bats, throws FROM PlayerHandedness
-            WHERE player_name = ?
-        """, (normalized_name,)).fetchone()
+        c.execute("""
+            SELECT bats, throws FROM player_handedness
+            WHERE player_name = %s
+        """, (normalized_name,))
+        result = c.fetchone()
     else:
         return {'bats': 'Unknown', 'throws': 'Unknown'}
     
@@ -1085,7 +1149,7 @@ def apply_handedness_matchup_adjustment(conn, game_id, player_mlbam_id, is_pitch
     Applies a matchup adjustment based on batter-pitcher handedness matchup.
     
     Args:
-        conn (sqlite3.Connection): Database connection
+        conn (psycopg2.Connection): Database connection
         game_id (int): Game ID
         player_mlbam_id (str): Player's MLBAM ID
         is_pitcher (bool): Whether the player is a pitcher
@@ -1097,10 +1161,11 @@ def apply_handedness_matchup_adjustment(conn, game_id, player_mlbam_id, is_pitch
     c = conn.cursor()
     
     # Get game information
-    game_data = c.execute("""
+    c.execute("""
         SELECT home_team_id, away_team_id, home_probable_pitcher_id, away_probable_pitcher_id 
-        FROM Games WHERE id = ?
-    """, (game_id,)).fetchone()
+        FROM games WHERE id = %s
+    """, (game_id,))
+    game_data = c.fetchone()
     
     if not game_data or not player_mlbam_id:
         return base_score
@@ -1108,9 +1173,10 @@ def apply_handedness_matchup_adjustment(conn, game_id, player_mlbam_id, is_pitch
     home_team_id, away_team_id, home_pitcher_id, away_pitcher_id = game_data
     
     # Get player team and handedness
-    player_data = c.execute("""
-        SELECT team_id FROM PlayerTeams WHERE mlbam_id = ?
-    """, (player_mlbam_id,)).fetchone()
+    c.execute("""
+        SELECT team_id FROM player_teams WHERE mlbam_id = %s
+    """, (player_mlbam_id,))
+    player_data = c.fetchone()
     
     if not player_data:
         return base_score
@@ -1128,12 +1194,13 @@ def apply_handedness_matchup_adjustment(conn, game_id, player_mlbam_id, is_pitch
             
         # Get opposing team's batter handedness distribution
         batter_counts = {"L": 0, "R": 0, "S": 0}
-        batters = c.execute("""
+        c.execute("""
             SELECT ph.mlbam_id, ph.bats 
-            FROM PlayerHandedness ph
-            JOIN PlayerTeams pt ON ph.mlbam_id = pt.mlbam_id
-            WHERE pt.team_id = ?
-        """, (opponent_team_id,)).fetchall()
+            FROM player_handedness ph
+            JOIN player_teams pt ON ph.mlbam_id = pt.mlbam_id
+            WHERE pt.team_id = %s
+        """, (opponent_team_id,))
+        batters = c.fetchall()
         
         for _, bats in batters:
             if bats in batter_counts:
@@ -1172,7 +1239,7 @@ def apply_fip_adjustment(conn, game_id, hitter_team_id, base_score):
     Applies a FIP adjustment to a base score based on the opposing pitcher's FIP.
 
     Args:
-        conn (sqlite3.Connection): The database connection.
+        conn (psycopg2.Connection): The database connection.
         game_id (int): The ID of the game.
         hitter_team_id (int): The ID of the hitting team.
         base_score (float): The base score to adjust.
@@ -1182,10 +1249,11 @@ def apply_fip_adjustment(conn, game_id, hitter_team_id, base_score):
     """
     c = conn.cursor()
     # Identify opposing pitcher MLBAMID
-    result = c.execute(
-        "SELECT home_team_id, away_team_id, home_probable_pitcher_id, away_probable_pitcher_id FROM Games WHERE id = ?",
+    c.execute(
+        "SELECT home_team_id, away_team_id, home_probable_pitcher_id, away_probable_pitcher_id FROM games WHERE id = %s",
         (game_id,)
-    ).fetchone()
+    )
+    result = c.fetchone()
 
     if not result:
         return base_score
@@ -1202,7 +1270,8 @@ def apply_fip_adjustment(conn, game_id, hitter_team_id, base_score):
     if opposing_pitcher_id is None:
         return base_score  # No probable pitcher
 
-    result = c.execute("SELECT fip FROM pitchers_full_season WHERE MLBAMID = ?", (str(opposing_pitcher_id),)).fetchone()
+    c.execute("SELECT fip FROM pitchers_full_season WHERE mlbamid = %s", (str(opposing_pitcher_id),))
+    result = c.fetchone()
 
     if not result:
         return base_score  # No FIP available
@@ -1226,4 +1295,3 @@ def apply_fip_adjustment(conn, game_id, hitter_team_id, base_score):
         multiplier = 1.20
 
     return base_score * multiplier
-

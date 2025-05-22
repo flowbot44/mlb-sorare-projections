@@ -1,6 +1,5 @@
 import os
-import sqlite3
-from utils import DATABASE_FILE  # Assuming utils.py is in the same directory
+from utils import get_db_connection  # Updated to use the new connection function
 
 import pandas as pd
 
@@ -51,21 +50,39 @@ STADIUM_DATA_VERIFIED = {
 #}
 
 def insert_regular_season_stadiums(conn):
-    """Insert stadium data from STADIUM_DATA into the SQLite database."""
+    """Insert stadium data from STADIUM_DATA into the PostgreSQL database."""
     
-    c = conn.cursor()
+    cur = conn.cursor()
 
-    c.execute("drop table if exists Stadiums")
-    # Ensure the Stadiums table exists
-    c.execute('''CREATE TABLE IF NOT EXISTS Stadiums 
-                 (id INTEGER PRIMARY KEY, name TEXT, lat REAL, lon REAL, orientation REAL, is_dome INTEGER, timezone TEXT)''')
+    # Drop and recreate table (PostgreSQL syntax)
+    cur.execute("DROP TABLE IF EXISTS stadiums CASCADE")
+    
+    # Create the Stadiums table with PostgreSQL syntax
+    cur.execute('''CREATE TABLE stadiums (
+                     id INTEGER PRIMARY KEY, 
+                     name TEXT, 
+                     lat REAL, 
+                     lon REAL, 
+                     orientation REAL, 
+                     is_dome INTEGER, 
+                     timezone TEXT
+                   )''')
 
+    # Insert stadium data using PostgreSQL syntax
     for stadium_id, stadium_info in STADIUM_DATA_VERIFIED.items():
         name, lat, lon, orientation, is_dome, timezone = stadium_info
-        c.execute("""
-            INSERT OR REPLACE INTO Stadiums (id, name, lat, lon, orientation, is_dome, timezone) 
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+        cur.execute("""
+            INSERT INTO stadiums (id, name, lat, lon, orientation, is_dome, timezone) 
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (id) DO UPDATE SET
+                name = EXCLUDED.name,
+                lat = EXCLUDED.lat,
+                lon = EXCLUDED.lon,
+                orientation = EXCLUDED.orientation,
+                is_dome = EXCLUDED.is_dome,
+                timezone = EXCLUDED.timezone
         """, (stadium_id, name, lat, lon, orientation, is_dome, timezone))
+    
     conn.commit()
     print(f"✅ {len(STADIUM_DATA_VERIFIED)} stadiums inserted into the database!")
 
@@ -76,19 +93,29 @@ def load_park_factors_from_csv(conn, csv_path='park_data.csv'):
     factor_types = ['Park Factor', 'wOBACon', 'xwOBACon', 'BACON', 'xBACON', 'HardHit', 
                     'R', 'OBP', 'H', '1B', '2B', '3B', 'HR', 'BB', 'SO']
     
-    c = conn.cursor()
-    c.execute("drop table if exists ParkFactors")
-    c.execute('''CREATE TABLE IF NOT EXISTS ParkFactors 
-                 (id INTEGER PRIMARY KEY AUTOINCREMENT, stadium_id INTEGER, factor_type TEXT, value REAL)''')
+    cur = conn.cursor()
+    
+    # Drop and recreate table (PostgreSQL syntax)
+    cur.execute("DROP TABLE IF EXISTS park_factors CASCADE")
+    cur.execute('''CREATE TABLE park_factors (
+                     id SERIAL PRIMARY KEY, 
+                     stadium_id INTEGER, 
+                     factor_type TEXT, 
+                     value REAL,
+                     FOREIGN KEY (stadium_id) REFERENCES stadiums(id)
+                   )''')
     
     for _, row in df.iterrows():
         venue = row['Venue']
-        stadium_id = c.execute("SELECT id FROM Stadiums WHERE name LIKE ?", (f"%{venue}%",)).fetchone()
-        if stadium_id:
-            stadium_id = stadium_id[0]
+        # Use PostgreSQL parameter syntax (%s instead of ?)
+        cur.execute("SELECT id FROM stadiums WHERE name ILIKE %s", (f"%{venue}%",))
+        stadium_result = cur.fetchone()
+        
+        if stadium_result:
+            stadium_id = stadium_result[0]
             for factor_type in factor_types:
                 value = row[factor_type]
-                c.execute("INSERT INTO ParkFactors (stadium_id, factor_type, value) VALUES (?, ?, ?)",
+                cur.execute("INSERT INTO park_factors (stadium_id, factor_type, value) VALUES (%s, %s, %s)",
                           (stadium_id, factor_type, value))
     
     conn.commit()
@@ -97,14 +124,15 @@ def load_park_factors_from_csv(conn, csv_path='park_data.csv'):
 
 def main():
     # Run the one-time update
-    conn = sqlite3.connect(DATABASE_FILE)
-    insert_regular_season_stadiums(conn)
+    conn = get_db_connection()
+    try:
+        insert_regular_season_stadiums(conn)
 
-    park_data_csv = os.path.join("data", 'park_data.csv')
-    load_park_factors_from_csv(conn, park_data_csv)
-
-    
-    conn.close()
+        park_data_csv = os.path.join("data", 'park_data.csv')
+        load_park_factors_from_csv(conn, park_data_csv)
+        
+    finally:
+        conn.close()
 
 if __name__ == "__main__":
     main()

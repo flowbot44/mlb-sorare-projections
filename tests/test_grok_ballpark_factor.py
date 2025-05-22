@@ -16,7 +16,7 @@ class TestProcessHitter(unittest.TestCase):
 
         # Create necessary tables
         self.cursor.execute("""
-            CREATE TABLE PlayerTeams (
+            CREATE TABLE player_teams (
                 mlbam_id TEXT PRIMARY KEY,
                 team_id INTEGER
             )
@@ -29,7 +29,7 @@ class TestProcessHitter(unittest.TestCase):
             )
         """)
         self.cursor.execute("""
-            CREATE TABLE WeatherForecasts (
+            CREATE TABLE weather_forecasts (
                 game_id INTEGER,
                 wind_dir INTEGER,
                 wind_speed INTEGER,
@@ -37,14 +37,14 @@ class TestProcessHitter(unittest.TestCase):
             )
         """)
         self.cursor.execute("""
-            CREATE TABLE ParkFactors (
+            CREATE TABLE park_factors (
                 stadium_id INTEGER,
                 factor_type TEXT,
                 value REAL
             )
         """)
         self.cursor.execute("""
-            CREATE TABLE AdjustedProjections (
+            CREATE TABLE adjusted_projections (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 player_name TEXT,
                 mlbam_id TEXT,
@@ -81,9 +81,9 @@ class TestProcessHitter(unittest.TestCase):
 
     def test_process_hitter_inserts_projection(self):
         # Insert mock data
-        self.cursor.execute("INSERT INTO PlayerTeams (mlbam_id, team_id) VALUES ('12345', 1)")
+        self.cursor.execute("INSERT INTO player_teams (mlbam_id, team_id) VALUES ('12345', 1)")
         self.cursor.execute("INSERT INTO Stadiums (id, is_dome, orientation) VALUES (1, 0, 90)")
-        self.cursor.execute("INSERT INTO ParkFactors (stadium_id, factor_type, value) VALUES (1, 'HR', 100)")
+        self.cursor.execute("INSERT INTO park_factors (stadium_id, factor_type, value) VALUES (1, 'HR', 100)")
         # Insert a game with neutral FIP pitchers
         self.cursor.execute("INSERT INTO Games (id, home_team_id, away_team_id, home_probable_pitcher_id, away_probable_pitcher_id) VALUES (1, 1, 2, 1, 2)")
 
@@ -110,7 +110,7 @@ class TestProcessHitter(unittest.TestCase):
         process_hitter(self.conn, game_data, hitter_data, injuries, game_week_id)
 
         # Verify the result
-        self.cursor.execute("SELECT * FROM AdjustedProjections WHERE mlbam_id = '12345'")
+        self.cursor.execute("SELECT * FROM adjusted_projections WHERE mlbam_id = '12345'")
         result = self.cursor.fetchone()
         self.assertIsNotNone(result)
         self.assertEqual(result[1], "JOHN DOE")  # player_name
@@ -121,14 +121,14 @@ class TestProcessHitter(unittest.TestCase):
     def test_process_hitter_updates_existing_projection(self):
 
 
-        self.cursor.execute("INSERT INTO PlayerTeams (mlbam_id, team_id) VALUES ('12345', 1)")
+        self.cursor.execute("INSERT INTO player_teams (mlbam_id, team_id) VALUES ('12345', 1)")
         self.cursor.execute("INSERT INTO Stadiums (id, is_dome, orientation) VALUES (1, 0, 90)")
-        self.cursor.execute("INSERT INTO ParkFactors (stadium_id, factor_type, value) VALUES (1, 'HR', 100)")
+        self.cursor.execute("INSERT INTO park_factors (stadium_id, factor_type, value) VALUES (1, 'HR', 100)")
 
 
         self.cursor.execute("INSERT INTO Games (id, home_team_id, away_team_id, home_probable_pitcher_id, away_probable_pitcher_id) VALUES (1, 1, 2, 1, 2)")
         self.cursor.execute("""
-            INSERT INTO AdjustedProjections (player_name, mlbam_id, game_id, game_date, sorare_score, game_week, team_id)
+            INSERT INTO adjusted_projections (player_name, mlbam_id, game_id, game_date, sorare_score, game_week, team_id)
             VALUES ('John Doe', '12345', 1, '2023-10-01', 3.0, 1, 1)
         """)
 
@@ -159,16 +159,16 @@ class TestProcessHitter(unittest.TestCase):
 
         
         
-        self.cursor.execute("SELECT sorare_score FROM AdjustedProjections WHERE mlbam_id = '12345'")
+        self.cursor.execute("SELECT sorare_score FROM adjusted_projections WHERE mlbam_id = '12345'")
         result = self.cursor.fetchone()
         self.assertIsNotNone(result)
         self.assertEqual(result[0], 5.0)  # Updated sorare_score (0.5 HR * 10 points)
 
     def test_hitter_projection_calculation(self):
       
-        self.cursor.execute("INSERT INTO PlayerTeams (mlbam_id, team_id) VALUES ('12345', 1)")
+        self.cursor.execute("INSERT INTO player_teams (mlbam_id, team_id) VALUES ('12345', 1)")
         self.cursor.execute("INSERT INTO Stadiums (id, is_dome, orientation) VALUES (1, 0, 90)")
-        self.cursor.execute("INSERT INTO ParkFactors (stadium_id, factor_type, value) VALUES (1, 'HR', 100)")
+        self.cursor.execute("INSERT INTO park_factors (stadium_id, factor_type, value) VALUES (1, 'HR', 100)")
       
         self.cursor.execute("INSERT INTO Games (id, home_team_id, away_team_id, home_probable_pitcher_id, away_probable_pitcher_id) VALUES (1, 1, 2, 1, 2)")
 
@@ -206,7 +206,7 @@ class TestProcessHitter(unittest.TestCase):
         process_hitter(self.conn, game_data, hitter_data, injuries, game_week_id)
 
        
-        self.cursor.execute("SELECT sorare_score FROM AdjustedProjections WHERE mlbam_id = '12345'")
+        self.cursor.execute("SELECT sorare_score FROM adjusted_projections WHERE mlbam_id = '12345'")
         result = self.cursor.fetchone()
         self.assertIsNotNone(result)
 
@@ -216,10 +216,10 @@ class TestProcessHitter(unittest.TestCase):
 
     def test_starting_pitcher_projection_calculation(self):
         # Insert mock data
-        self.cursor.execute("INSERT INTO PlayerTeams (mlbam_id, team_id) VALUES ('54321', 2)")
+        self.cursor.execute("INSERT INTO player_teams (mlbam_id, team_id) VALUES ('54321', 2)")
         self.cursor.execute("INSERT INTO Stadiums (id, is_dome, orientation) VALUES (1, 1, 90)")
-        self.cursor.execute("INSERT INTO ParkFactors (stadium_id, factor_type, value) VALUES (1, 'IP', 100)")
-        self.cursor.execute("INSERT INTO ParkFactors (stadium_id, factor_type, value) VALUES (1, 'K', 100)")
+        self.cursor.execute("INSERT INTO park_factors (stadium_id, factor_type, value) VALUES (1, 'IP', 100)")
+        self.cursor.execute("INSERT INTO park_factors (stadium_id, factor_type, value) VALUES (1, 'K', 100)")
         # Insert a game with neutral FIP pitchers
         self.cursor.execute("INSERT INTO Games (id, home_team_id, away_team_id, home_probable_pitcher_id, away_probable_pitcher_id) VALUES (1, 1, 2, 1, 2)")
 
@@ -254,7 +254,7 @@ class TestProcessHitter(unittest.TestCase):
         process_pitcher(self.conn, game_data, pitcher_data, injuries, game_week_id, is_starter=True)
 
         # Verify the result
-        self.cursor.execute("SELECT sorare_score FROM AdjustedProjections WHERE mlbam_id = '54321'")
+        self.cursor.execute("SELECT sorare_score FROM adjusted_projections WHERE mlbam_id = '54321'")
         result = self.cursor.fetchone()
         self.assertIsNotNone(result)
 
@@ -264,10 +264,10 @@ class TestProcessHitter(unittest.TestCase):
 
     def test_relief_pitcher_projection_calculation(self):
         # Insert mock data
-        self.cursor.execute("INSERT INTO PlayerTeams (mlbam_id, team_id) VALUES ('54321', 2)")
+        self.cursor.execute("INSERT INTO player_teams (mlbam_id, team_id) VALUES ('54321', 2)")
         self.cursor.execute("INSERT INTO Stadiums (id, is_dome, orientation) VALUES (1, 1, 90)")
-        self.cursor.execute("INSERT INTO ParkFactors (stadium_id, factor_type, value) VALUES (1, 'IP', 100)")
-        self.cursor.execute("INSERT INTO ParkFactors (stadium_id, factor_type, value) VALUES (1, 'K', 100)")
+        self.cursor.execute("INSERT INTO park_factors (stadium_id, factor_type, value) VALUES (1, 'IP', 100)")
+        self.cursor.execute("INSERT INTO park_factors (stadium_id, factor_type, value) VALUES (1, 'K', 100)")
         # Insert a game with neutral FIP pitchers
         self.cursor.execute("INSERT INTO Games (id, home_team_id, away_team_id, home_probable_pitcher_id, away_probable_pitcher_id) VALUES (1, 1, 2, 1, 2)")
         
@@ -302,7 +302,7 @@ class TestProcessHitter(unittest.TestCase):
         process_pitcher(self.conn, game_data, pitcher_data, injuries, game_week_id, is_starter=False)
 
         # Verify the result
-        self.cursor.execute("SELECT sorare_score FROM AdjustedProjections WHERE mlbam_id = '54321'")
+        self.cursor.execute("SELECT sorare_score FROM adjusted_projections WHERE mlbam_id = '54321'")
         result = self.cursor.fetchone()
         self.assertIsNotNone(result)
 

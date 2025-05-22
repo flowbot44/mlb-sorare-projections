@@ -138,9 +138,10 @@
     <form class="d-inline-block">
         <div class="input-group">
             <select class="form-select" id="gameWeekSelect" onchange="location = '/projections/' + this.value;">
-                {% for week in game_weeks %}
-                    <option value="{{ week.game_week }}" {% if week.game_week == current_game_week %}selected{% endif %}>
-                        {{ week.game_week.replace('_to_', ' to ') }}
+                {% for week_tuple in game_weeks %}
+                    {% set week = week_tuple[0] %} {# Extract the game_week string from the tuple #}
+                    <option value="{{ week }}" {% if week == current_game_week %}selected{% endif %}>
+                        {{ week.replace('_to_', ' to ') }}
                     </option>
                 {% endfor %}
             </select>

@@ -4,9 +4,29 @@ services:
     container_name: sorare-lineup-optimizer
     ports:
       - "8080:8080"
-    volumes:
-      - ./database:/app/database  # Make sure this directory exists locally
+    env_file:
+      - .env
     environment:
       - PORT=5000
-      - DATABASE_PATH=/app/database/mlb_sorare.db
       - SELENIUM_HEADLESS=true
+    depends_on:
+      - db
+    networks:
+      - appnet
+
+  db:
+    image: postgres:17
+    restart: always
+    env_file:
+      - .env
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks:
+      - appnet
+    
+    
+volumes:
+  pgdata:
+
+networks:
+  appnet:
