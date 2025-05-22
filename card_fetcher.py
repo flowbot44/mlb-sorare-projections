@@ -1,10 +1,9 @@
 import requests
 import json
 import re
-import sqlite3
 import time
 import random
-from utils import normalize_name, DATABASE_FILE
+from utils import get_db_connection, normalize_name
 
 
 class SorareMLBClient:
@@ -106,7 +105,7 @@ class SorareMLBClient:
             for card in all_cards
         ]
         
-        conn = sqlite3.connect(DATABASE_FILE)
+        conn = get_db_connection()
         cursor = conn.cursor()
         
         cursor.execute('''
@@ -118,24 +117,44 @@ class SorareMLBClient:
                 rarity TEXT,
                 positions TEXT,
                 username TEXT,
-                sealed BOOLEAN DEFAULT 0
+                sealed BOOLEAN DEFAULT FALSE
             )
         ''')
 
-        cursor.execute("DELETE FROM cards WHERE username = ?", (username,))  
+        cursor.execute("DELETE FROM cards WHERE username = %s", (username,))  
+
         
         for card in formatted_cards:
             #print(f"Inserting card: {card['name']} ({card['slug']})")
             cursor.execute('''
-                INSERT OR REPLACE INTO cards (slug, name, birthday, year, rarity, positions, sealed, username)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (card['slug'], card['name'], card['birthday'], card['year'], extract_rarity(card['rarity']), ', '.join(card['positions']), card['sealed'], username))
+                INSERT INTO cards (slug, name, birthday, year, rarity, positions, sealed, username)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (slug) DO UPDATE SET
+                    name = EXCLUDED.name,
+                    birthday = EXCLUDED.birthday,
+                    year = EXCLUDED.year,
+                    rarity = EXCLUDED.rarity,
+                    positions = EXCLUDED.positions,
+                    sealed = EXCLUDED.sealed,
+                    username = EXCLUDED.username
+            ''', (
+                card['slug'],
+                card['name'],
+                card['birthday'],
+                card['year'],
+                extract_rarity(card['rarity']),
+                ', '.join(card['positions']),
+                bool(card['sealed']),
+                username
+            ))
         
         conn.commit()
+        cursor.close()
         conn.close()
         
-        print(f"Data saved to SQLite database 'mlb_sorare.db'")
+        print(f"Data saved to database for user '{username}'")
         return {"nickname": username, "cards": formatted_cards}
+    
 def extract_rarity(rarity_string):
     """
     Extracts the base rarity (common, rare, limited) from a string using split.
@@ -164,12 +183,31 @@ def parse_player_string(player_string):
         }
     return {}
 
+def display_inserted_cards(username):
+    """Fetch and display cards for the given username from the database."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT slug, name, birthday, year, rarity, positions, sealed FROM cards WHERE username = %s",
+        (username,)
+    )
+    rows = cursor.fetchall()
+    if not rows:
+        print(f"No cards found in the database for user '{username}'.")
+    else:
+        print(f"\nCards in database for user '{username}':")
+        for row in rows:
+            print(f"Slug: {row[0]}, Name: {row[1]}, Birthday: {row[2]}, Year: {row[3]}, Rarity: {row[4]}, Positions: {row[5]}, Sealed: {row[6]}")
+    cursor.close()
+    conn.close()
+
 def main():
     client = SorareMLBClient()
     username = input("Enter Sorare username to look up: ")
     
-    print(f"Fetching MLB cards (Rare) for user '{username}'...")
+    print(f"Fetching MLB cards for user '{username}'...")
     result = client.get_user_mlb_cards(username)
+    display_inserted_cards(username)
     
 if __name__ == "__main__":
     main()

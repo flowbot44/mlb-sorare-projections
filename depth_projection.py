@@ -1,26 +1,11 @@
 import pandas as pd
-import sqlite3
 import os
-from utils import normalize_name, DATABASE_FILE
+from utils import get_sqlalchemy_engine, normalize_name
 import logging
+from sqlalchemy import text
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-# Debugging info
-logging.info(f"Current working directory: {os.getcwd()}")
-logging.info(f"DATABASE_FILE path: {DATABASE_FILE}")
-logging.info(f"Directory portion: {os.path.dirname(DATABASE_FILE)}")
-
-# Check directory permissions
-if os.path.dirname(DATABASE_FILE):
-    if not os.path.exists(os.path.dirname(DATABASE_FILE)):
-        logging.info(f"Directory does not exist, creating: {os.path.dirname(DATABASE_FILE)}")
-        os.makedirs(os.path.dirname(DATABASE_FILE), exist_ok=True)
-    
-    test_permissions = os.access(os.path.dirname(DATABASE_FILE), os.W_OK)
-    logging.info(f"Directory is writable: {test_permissions}")
-
-# Use environment variables with defaults
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 
 # Construct file paths
@@ -35,7 +20,6 @@ def check_csv_columns(filepath):
         print(f"ERROR: File {filepath} does not exist!")
         return None
     
-    # Read the first few rows to inspect
     try:
         df = pd.read_csv(filepath, nrows=1)
         return df.columns.tolist()
@@ -46,12 +30,12 @@ def check_csv_columns(filepath):
 # Function to determine name column
 def determine_name_column(columns, file_type="hitter"):
     name_col = None
-    possible_names = ['fName', 'Name', 'name', 'PLAYERNAME', 'PlayerName', 'Player', 'player']
+    possible_names = ['fname', 'name', 'playername', 'player']
     if file_type == "pitcher":
-        possible_names = ['tName'] + possible_names
+        possible_names = ['tname'] + possible_names
     
     for possible_name in possible_names:
-        if possible_name in columns:
+        if possible_name in [col.lower() for col in columns]:
             name_col = possible_name
             print(f"Using '{name_col}' as the {file_type} name column")
             break
@@ -60,6 +44,7 @@ def determine_name_column(columns, file_type="hitter"):
 
 # Function to safely get a column value with fallbacks
 def safe_get_col(row, col_name, col_map=None):
+    col_name = col_name.lower()
     if col_name in row.index:
         return row[col_name]
     elif col_map and col_name in col_map and col_map[col_name] in row.index:
@@ -67,35 +52,33 @@ def safe_get_col(row, col_name, col_map=None):
     return 0  # Default to 0 if column not found
 
 # Define proration function for hitters (per game)
-def prorate_hitter(row, name_col,  col_map=None):
-    actual_games = safe_get_col(row, 'G')
+def prorate_hitter(row, name_col, col_map=None):
+    actual_games = safe_get_col(row, 'g')
     
     result = {
         name_col: row[name_col],
-        'G': actual_games,  # Keep track of actual projected games
-        
+        'g': actual_games,
+        'mlbamid': str(0)  # Default as string
     }
     
-    # Try to get MLBAMID if available
-    if 'MLBAMID' in row.index:
-        result['MLBAMID'] = row['MLBAMID']
-    elif 'mlbamid' in row.index:
-        result['MLBAMID'] = row['mlbamid']
-    else:
-        result['MLBAMID'] = 0  # Default if missing
+    # Try to get mlbamid if available
+    if 'mlbamid' in row.index:
+        result['mlbamid'] = str(row['mlbamid'])  # Convert to string
     
     if actual_games == 0:
-        # Set all stats to 0 if actual games is 0
-        for stat in ['R', 'RBI', '1B', '2B', '3B', 'HR', 'BB', 'SO', 'SB', 'CS', 'HBP']:
+        for stat in ['r', 'rbi', '1b', '2b', '3b', 'hr', 'bb', 'so', 'sb', 'cs', 'hbp']:
             result[f'{stat}_per_game'] = 0.0
     else:
-        # Calculate per game stats using games
-        for stat in ['R', 'RBI', '1B', '2B', '3B', 'HR', 'BB', 'SO', 'SB', 'CS', 'HBP']:
+        for stat in ['r', 'rbi', '1b', '2b', '3b', 'hr', 'bb', 'so', 'sb', 'cs', 'hbp']:
             value = safe_get_col(row, stat, col_map)
-            # First get the full projection by extrapolating from actual games to max games
-            # Then get the per-game value based on max games
-            if stat == 'SO':
-                result['K_per_game'] = value / actual_games
+            if stat == 'so':
+                result['k_per_game'] = value / actual_games
+            elif stat == '1b':
+                result['singles_per_game'] = value / actual_games
+            elif stat == '2b':
+                result['doubles_per_game'] = value / actual_games
+            elif stat == '3b':
+                result['triples_per_game'] = value / actual_games
             else:
                 result[f'{stat}_per_game'] = value / actual_games
     
@@ -103,75 +86,81 @@ def prorate_hitter(row, name_col,  col_map=None):
 
 # Define proration function for pitchers (per game)
 def prorate_pitcher(row, name_col, col_map=None):
-    """Prorate pitcher stats on a per-game basis."""
-    games = safe_get_col(row, 'G')
+    games = safe_get_col(row, 'g')
     
     result = {
         name_col: row[name_col],
-        'G': games
+        'g': games,
+        'mlbamid': str(0)  # Default as string
     }
     
-    # Try to get MLBAMID if available
-    if 'MLBAMID' in row.index:
-        result['MLBAMID'] = row['MLBAMID']
-    elif 'mlbamid' in row.index:
-        result['MLBAMID'] = row['mlbamid']
-    else:
-        result['MLBAMID'] = 0  # Default if missing
+    if 'mlbamid' in row.index:
+        result['mlbamid'] = str(row['mlbamid'])  # Convert to string
     
     if games == 0:
-        # Set all stats to 0 if games is 0
-        for stat in ['IP', 'SO', 'H', 'ER', 'BB', 'HBP', 'W', 'R', 'SV', 'HLD']:
+        for stat in ['ip', 'so', 'h', 'er', 'bb', 'hbp', 'w', 'r', 'sv', 'hld']:
             result[f'{stat}_per_game'] = 0.0
     else:
-        # Calculate per game stats
-        for stat in ['IP', 'H', 'ER', 'BB', 'HBP', 'W', 'R', 'HLD']:
+        for stat in ['ip', 'h', 'er', 'bb', 'hbp', 'w', 'r', 'hld']:
             value = safe_get_col(row, stat, col_map)
             result[f'{stat}_per_game'] = value / games
         
-        # Map 'SO' in data to 'K' in desired output
-        so_value = safe_get_col(row, 'SO', col_map)
-        result['K_per_game'] = so_value / games
+        so_value = safe_get_col(row, 'so', col_map)
+        result['k_per_game'] = so_value / games
         
-        # Map 'SV' to 'S' in desired output
-        sv_value = safe_get_col(row, 'SV', col_map)
-        result['S_per_game'] = sv_value / games
+        sv_value = safe_get_col(row, 'sv', col_map)
+        result['s_per_game'] = sv_value / games
     
     return pd.Series(result)
 
 # Process a dataset and create tables
 def process_dataset(df, name_col, table_prefix, conn, col_map=None, is_pitcher=False):
-    """Process a dataset and create both full season and per-game tables"""
-    # Normalize player names
     df[name_col] = df[name_col].apply(normalize_name)
+    df.columns = df.columns.str.lower()
     
-    # Drop existing tables to ensure fresh data
-    conn.execute(f'DROP TABLE IF EXISTS {table_prefix}_full_season')
-    conn.execute(f'DROP TABLE IF EXISTS {table_prefix}_per_game')
+    # Apply column mapping to rename columns if col_map is provided
+    if col_map:
+        df = df.rename(columns={v: k for k, v in col_map.items()})  # Reverse the mapping (e.g., '1b' -> 'singles')
     
-    # Create full season table
+    # Convert mlbamid to string
+    if 'mlbamid' in df.columns:
+        df['mlbamid'] = df['mlbamid'].astype(str)
+    
+    try:
+        with conn.begin():  # Transaction is managed here
+            conn.execute(text(f'DROP TABLE IF EXISTS {table_prefix}_full_season'))
+            conn.execute(text(f'DROP TABLE IF EXISTS {table_prefix}_per_game'))
+            print(f"Dropped tables {table_prefix}_full_season and {table_prefix}_per_game")
+    except Exception as e:
+        print(f"Error dropping tables: {e}")
+        raise
+    
     print(f"Creating {table_prefix}_full_season table...")
-    df.to_sql(f'{table_prefix}_full_season', conn, if_exists='replace', index=False)
+    df.to_sql(f'{table_prefix}_full_season', conn.engine, if_exists='replace', index=False, method='multi')
     
-    # Generate per-game projections
     print(f"Calculating per-game stats for {table_prefix}...")
-    
     if is_pitcher:
         per_game_df = df.apply(lambda row: prorate_pitcher(row, name_col, col_map), axis=1)
     else:     
         per_game_df = df.apply(lambda row: prorate_hitter(row, name_col, col_map), axis=1)
     
-    # Create per-game table
+    per_game_df.columns = per_game_df.columns.str.lower()
+    # Convert mlbamid to string in per-game DataFrame
+    if 'mlbamid' in per_game_df.columns:
+        per_game_df['mlbamid'] = per_game_df['mlbamid'].astype(str)
+    
     print(f"Creating {table_prefix}_per_game table...")
-    per_game_df.to_sql(f'{table_prefix}_per_game', conn, if_exists='replace', index=False)
+    per_game_df.to_sql(f'{table_prefix}_per_game', conn.engine, if_exists='replace', index=False, method='multi')
     
     return (df, per_game_df)
 
 # Create the database connection
-logging.info(f"Attempting to connect to database at: {DATABASE_FILE}")
 conn = None
 try:
-    conn = sqlite3.connect(DATABASE_FILE)
+    engine = get_sqlalchemy_engine()
+    conn = engine.connect()
+    if conn is None:
+        raise Exception("Failed to create database connection.")
     logging.info("Successfully connected to the database.")
     
     # Process standard hitters dataset
@@ -188,23 +177,24 @@ try:
         
     print(f"Reading {hitter_file}...")
     hitters = pd.read_csv(hitter_file)
+    hitters.columns = hitters.columns.str.lower()  # Convert CSV columns to lowercase
     
-    # Map column names for calculations if needed
+    # In the main script, update the hitter processing section
     hitter_col_map = {}
-    # Check for required columns and map alternates
-    required_hitter_cols = ['G', 'R', 'RBI', '1B', '2B', '3B', 'HR', 'BB', 'SO', 'SB', 'CS', 'HBP']
+    required_hitter_cols = ['g', 'r', 'rbi', 'singles', 'doubles', 'triples', 'hr', 'bb', 'so', 'sb', 'cs', 'hbp']
     for req_col in required_hitter_cols:
         if req_col not in hitters.columns:
-            # Try to find alternate column names
-            if req_col == 'SO' and 'K' in hitters.columns:
-                hitter_col_map['SO'] = 'K'
-            elif req_col == '1B' and '1B' not in hitters.columns and 'H' in hitters.columns and '2B' in hitters.columns and '3B' in hitters.columns and 'HR' in hitters.columns:
-                # Calculate 1B if not present but can be derived
-                hitters['1B'] = hitters['H'] - hitters['2B'] - hitters['3B'] - hitters['HR']
+            if req_col == 'so' and 'k' in hitters.columns:
+                hitter_col_map['so'] = 'k'
+            elif req_col == 'singles' and '1b' in hitters.columns:
+                hitter_col_map['singles'] = '1b'  # Map '1B' to 'single'
+            elif req_col == 'doubles' and '2b' in hitters.columns:
+                hitter_col_map['doubles'] = '2b'  # Map '2B' to 'double'
+            elif req_col == 'triples' and '3b' in hitters.columns:
+                hitter_col_map['triples'] = '3b'  # Map '3B' to 'triple'
             else:
                 print(f"WARNING: Missing required hitter column: {req_col}")
                 
-    # Process the standard hitters dataset
     hitters_result = process_dataset(hitters, hitter_name_col, "hitters", conn, hitter_col_map)
     
     # Process standard pitchers dataset
@@ -221,22 +211,19 @@ try:
         
     print(f"Reading {pitcher_file}...")
     pitchers = pd.read_csv(pitcher_file)
+    pitchers.columns = pitchers.columns.str.lower()  # Convert CSV columns to lowercase
     
-    # Map column names for pitchers if needed
     pitcher_col_map = {}
-    # Check for required columns and map alternates
-    required_pitcher_cols = ['G', 'IP', 'SO', 'H', 'ER', 'BB', 'HBP', 'W', 'R', 'SV', 'HLD']
+    required_pitcher_cols = ['g', 'ip', 'so', 'h', 'er', 'bb', 'hbp', 'w', 'r', 'sv', 'hld']
     for req_col in required_pitcher_cols:
         if req_col not in pitchers.columns:
-            # Try to find alternate column names
-            if req_col == 'SO' and 'K' in pitchers.columns:
-                pitcher_col_map['SO'] = 'K'
-            elif req_col == 'SV' and 'S' in pitchers.columns:
-                pitcher_col_map['SV'] = 'S'
+            if req_col == 'so' and 'k' in pitchers.columns:
+                pitcher_col_map['so'] = 'k'
+            elif req_col == 'sv' and 's' in pitchers.columns:
+                pitcher_col_map['sv'] = 's'
             else:
                 print(f"WARNING: Missing required pitcher column: {req_col}")
                 
-    # Process the standard pitchers dataset
     pitchers_result = process_dataset(pitchers, pitcher_name_col, "pitchers", conn, pitcher_col_map, is_pitcher=True)
     
     # Process hitters vs RHP dataset
@@ -252,22 +239,22 @@ try:
             else:
                 print(f"Reading {hitter_vs_rhp_file}...")
                 hitters_vs_rhp = pd.read_csv(hitter_vs_rhp_file)
+                hitters_vs_rhp.columns = hitters_vs_rhp.columns.str.lower()  # Convert CSV columns to lowercase
                 
-                # Map column names for hitters vs RHP if needed
                 hitter_vs_rhp_col_map = {}
-                # Check for required columns and map alternates
                 for req_col in required_hitter_cols:
                     if req_col not in hitters_vs_rhp.columns:
-                        # Try to find alternate column names
-                        if req_col == 'SO' and 'K' in hitters_vs_rhp.columns:
-                            hitter_vs_rhp_col_map['SO'] = 'K'
-                        elif req_col == '1B' and '1B' not in hitters_vs_rhp.columns and 'H' in hitters_vs_rhp.columns and '2B' in hitters_vs_rhp.columns and '3B' in hitters_vs_rhp.columns and 'HR' in hitters_vs_rhp.columns:
-                            # Calculate 1B if not present but can be derived
-                            hitters_vs_rhp['1B'] = hitters_vs_rhp['H'] - hitters_vs_rhp['2B'] - hitters_vs_rhp['3B'] - hitters_vs_rhp['HR']
+                        if req_col == 'so' and 'k' in hitters_vs_rhp.columns:
+                            hitter_vs_rhp_col_map['so'] = 'k'
+                        elif req_col == 'singles' and '1b' in hitters_vs_rhp.columns:
+                            hitter_vs_rhp_col_map['singles'] = '1b'
+                        elif req_col == 'doubles' and '2b' in hitters_vs_rhp.columns:
+                            hitter_vs_rhp_col_map['doubles'] = '2b'
+                        elif req_col == 'triples' and '3b' in hitters_vs_rhp.columns:
+                            hitter_vs_rhp_col_map['triples'] = '3b'
                         else:
                             print(f"WARNING: Missing required hitter vs RHP column: {req_col}")
                 
-                # Process the hitters vs RHP dataset
                 hitters_vs_rhp_result = process_dataset(hitters_vs_rhp, hitter_vs_rhp_name_col, "hitters_vs_rhp", conn, hitter_vs_rhp_col_map)
     else:
         print(f"Hitter vs RHP file not found: {hitter_vs_rhp_file}")
@@ -285,32 +272,32 @@ try:
             else:
                 print(f"Reading {hitter_vs_lhp_file}...")
                 hitters_vs_lhp = pd.read_csv(hitter_vs_lhp_file)
+                hitters_vs_lhp.columns = hitters_vs_lhp.columns.str.lower()  # Convert CSV columns to lowercase
                 
-                # Map column names for hitters vs LHP if needed
                 hitter_vs_lhp_col_map = {}
-                # Check for required columns and map alternates
                 for req_col in required_hitter_cols:
                     if req_col not in hitters_vs_lhp.columns:
-                        # Try to find alternate column names
-                        if req_col == 'SO' and 'K' in hitters_vs_lhp.columns:
-                            hitter_vs_lhp_col_map['SO'] = 'K'
-                        elif req_col == '1B' and '1B' not in hitters_vs_lhp.columns and 'H' in hitters_vs_lhp.columns and '2B' in hitters_vs_lhp.columns and '3B' in hitters_vs_lhp.columns and 'HR' in hitters_vs_lhp.columns:
-                            # Calculate 1B if not present but can be derived
-                            hitters_vs_lhp['1B'] = hitters_vs_lhp['H'] - hitters_vs_lhp['2B'] - hitters_vs_lhp['3B'] - hitters_vs_lhp['HR']
+                        if req_col == 'so' and 'k' in hitters_vs_lhp.columns:
+                            hitter_vs_lhp_col_map['so'] = 'k'
+                        elif req_col == 'singles' and '1b' in hitters_vs_lhp.columns:
+                            hitter_vs_lhp_col_map['singles'] = '1b'
+                        elif req_col == 'doubles' and '2b' in hitters_vs_lhp.columns:
+                            hitter_vs_lhp_col_map['doubles'] = '2b'
+                        elif req_col == 'triples' and '3b' in hitters_vs_lhp.columns:
+                            hitter_vs_lhp_col_map['triples'] = '3b'
                         else:
                             print(f"WARNING: Missing required hitter vs LHP column: {req_col}")
                 
-                # Process the hitters vs LHP dataset
                 hitters_vs_lhp_result = process_dataset(hitters_vs_lhp, hitter_vs_lhp_name_col, "hitters_vs_lhp", conn, hitter_vs_lhp_col_map)
     else:
         print(f"Hitter vs LHP file not found: {hitter_vs_lhp_file}")
     
     print("\nAll projections have been freshly imported and generated in 'mlb_sorare.db'.")
 
-except sqlite3.OperationalError as e:
-    logging.error(f"Error opening database: {e}")
-    raise
+except Exception as e:
+    logging.error(f"An error occurred: {e}")
+    if conn:
+        conn.rollback()
 finally:
-    # Close the connection only at the end after all operations
     if 'conn' in locals() and conn:
         conn.close()

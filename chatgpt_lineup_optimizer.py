@@ -1,17 +1,15 @@
-import sqlite3
 import pandas as pd
 from ortools.sat.python import cp_model
 import os
 import argparse
 from typing import Dict, List, Set, Optional
-from utils import determine_game_week, DATABASE_FILE  # Import from utils
+from utils import determine_game_week, get_db_connection, get_sqlalchemy_engine  # Add get_sqlalchemy_engine
 from datetime import datetime, timedelta
 from pandas.errors import DatabaseError
 
 
 # Configuration Constants
 class Config:
-    DB_PATH = DATABASE_FILE
     USERNAME = "flowbot44"
     SHOHEI_NAME = "shohei-ohtani"
     BOOST_2025 = 5.0
@@ -42,43 +40,34 @@ class Config:
     POSITIONS["Flx"] = POSITIONS["CI"] | POSITIONS["MI"] | POSITIONS["OF"] | POSITIONS["RP"]
     LINEUP_SLOTS = ["SP", "RP", "CI", "MI", "OF", "H", "Flx"]
 
-# Utility Functions
-def get_db_connection() -> sqlite3.Connection:
-    """Create a connection to the SQLite database."""
-    try:
-        os.makedirs(os.path.dirname(DATABASE_FILE), exist_ok=True)
-        return sqlite3.connect(DATABASE_FILE)
-    except sqlite3.Error as e:
-        raise RuntimeError(f"Failed to connect to database: {e}")
-
 def fetch_cards(username: str) -> pd.DataFrame:
     """Fetch eligible cards with team info from the database."""
-    with get_db_connection() as conn:
-        query = """
-            SELECT c.slug, c.name, c.year, c.rarity, c.positions, c.username, c.sealed, pt.team_id
-            FROM cards c
-            LEFT JOIN PlayerTeams pt ON c.name = pt.player_name
-            WHERE c.username = ? AND c.sealed = 0
-        """
-        cards_df = pd.read_sql(query, conn, params=(username,))
-        print(f"cards found {len(cards_df)}")
-        cards_df["year"] = cards_df["year"].astype(int)
-        cards_df.loc[cards_df["slug"].str.contains(Config.SHOHEI_NAME), "positions"] = "baseball_designated_hitter"
+    engine = get_sqlalchemy_engine()
+    query = """
+        SELECT c.slug, c.name, c.year, c.rarity, c.positions, c.username, c.sealed, pt.team_id
+        FROM cards c
+        LEFT JOIN player_teams pt ON c.name = pt.player_name
+        WHERE c.username = %s AND c.sealed = FALSE
+    """
+    cards_df = pd.read_sql(query, engine, params=(username,))
+    print(f"cards found {len(cards_df)}")
+    cards_df["year"] = cards_df["year"].astype(int)
+    cards_df.loc[cards_df["slug"].str.contains(Config.SHOHEI_NAME), "positions"] = "baseball_designated_hitter"
 
-        # Add debug info for players with same name but different teams
-        # Convert team_id to integer if it's coming back as float
-        if 'team_id' in cards_df.columns:
-            cards_df['team_id'] = cards_df['team_id'].fillna(-1).astype(int)
-            
-        # Better check for players with same name but different teams
-        name_groups = cards_df.groupby("name")["team_id"].nunique()
-        multi_team_players = name_groups[name_groups > 1].index.tolist()
+    # Add debug info for players with same name but different teams
+    # Convert team_id to integer if it's coming back as float
+    if 'team_id' in cards_df.columns:
+        cards_df['team_id'] = cards_df['team_id'].fillna(-1).astype(int)
         
-        if multi_team_players:
-            print("Note: Found players who truly appear on multiple teams:")
-            for name in multi_team_players:
-                teams = cards_df[cards_df["name"] == name]["team_id"].unique()
-                print(f"  - {name}: Teams {teams}")
+    # Better check for players with same name but different teams
+    name_groups = cards_df.groupby("name")["team_id"].nunique()
+    multi_team_players = name_groups[name_groups > 1].index.tolist()
+    
+    if multi_team_players:
+        print("Note: Found players who truly appear on multiple teams:")
+        for name in multi_team_players:
+            teams = cards_df[cards_df["name"] == name]["team_id"].unique()
+            print(f"  - {name}: Teams {teams}")
 
     return cards_df
 
@@ -92,30 +81,30 @@ def fetch_projections(ignore_game_ids: Optional[List] = None) -> pd.DataFrame:
     Returns:
         DataFrame with player projections
     """
-    with get_db_connection() as conn:
-        current_game_week = determine_game_week()
-        
-        # Base query
-        query = """
-            SELECT player_name, team_id, SUM(sorare_score) AS total_projection 
-            FROM AdjustedProjections 
-            WHERE game_week = ?
-        """
-        
-        params = [current_game_week]
-        
-        # Add filter for ignored game IDs if provided
-        if ignore_game_ids and len(ignore_game_ids) > 0:
-            placeholder = ','.join(['?'] * len(ignore_game_ids))
-            query += f" AND game_id NOT IN ({placeholder})"
-            params.extend(ignore_game_ids)
-        
-        # Complete the query with grouping
-        query += " GROUP BY player_name, team_id"
-        
-        # Execute query and return dataframe
-        projections_df = pd.read_sql(query, conn, params=tuple(params))
-        projections_df["total_projection"] = projections_df["total_projection"].fillna(0).infer_objects()
+    engine = get_sqlalchemy_engine()
+    current_game_week = determine_game_week()
+    
+    # Base query
+    query = """
+        SELECT player_name, team_id, SUM(sorare_score) AS total_projection 
+        FROM adjusted_projections 
+        WHERE game_week = %s
+    """
+    
+    params = [current_game_week]
+    
+    # Add filter for ignored game IDs if provided
+    if ignore_game_ids and len(ignore_game_ids) > 0:
+        placeholder = ','.join(['%s'] * len(ignore_game_ids))
+        query += f" AND game_id NOT IN ({placeholder})"
+        params.extend(ignore_game_ids)
+    
+    # Complete the query with grouping
+    query += " GROUP BY player_name, team_id"
+    
+    # Execute query and return dataframe
+    projections_df = pd.read_sql(query, engine, params=tuple(params))
+    projections_df["total_projection"] = projections_df["total_projection"].fillna(0).infer_objects()
     
     return projections_df
 
@@ -471,44 +460,42 @@ def build_all_lineups(cards_df: pd.DataFrame, projections_df: pd.DataFrame, ener
 def fetch_high_rain_games_details():
     """
     Fetch details for games with rain probability >= 75% for the current game week,
-    joining with Games and Stadiums tables. (Assumes this function exists from previous step)
+    joining with Games and Stadiums tables.
     """
-    with get_db_connection() as conn:
-        query = """
-            SELECT
-                wf.game_id,
-                g.date AS game_date,
-                g.time AS game_time_utc, -- Keep for potential future use or debugging
-                wf.rain,
-                wf.temp,
-                wf.wind_speed,
-                wf.wind_dir,
-                g.home_team_id,
-                g.away_team_id,
-                s.name as stadium_name
-            FROM WeatherForecasts wf
-            JOIN Games g ON wf.game_id = g.id
-            LEFT JOIN Stadiums s ON g.stadium_id = s.id
-            WHERE wf.rain >= 75
-            ORDER BY g.date ASC, g.time ASC;
-            """
-        try:
-            df = pd.read_sql(query, conn)
-            # Basic type conversion check
-            df['rain'] = pd.to_numeric(df['rain'], errors='coerce')
-            df['temp'] = pd.to_numeric(df['temp'], errors='coerce')
-            df['wind_speed'] = pd.to_numeric(df['wind_speed'], errors='coerce')
-            df['wind_dir'] = pd.to_numeric(df['wind_dir'], errors='coerce')
-            df = df.dropna(subset=['rain']) # Remove rows where rain couldn't be parsed
-            return df
-        except DatabaseError as e:
-             print(f"Database query error: {e}. Check if tables 'Games' or 'Stadiums' exist or have correct columns.")
-             return pd.DataFrame(columns=['game_id', 'game_date', 'game_time_utc', 'rain', 'temp', 'wind_speed', 'wind_dir', 'home_team_id', 'away_team_id', 'stadium_name'])
-        except Exception as e:
-            print(f"An unexpected error occurred during fetch_high_rain_games_details: {e}")
-            return pd.DataFrame(columns=['game_id', 'game_date', 'game_time_utc', 'rain', 'temp', 'wind_speed', 'wind_dir', 'home_team_id', 'away_team_id', 'stadium_name'])
-           
-# --- Updated Function ---
+    engine = get_sqlalchemy_engine()
+    query = """
+        SELECT
+            wf.game_id,
+            g.date AS game_date,
+            g.time AS game_time_utc,
+            wf.rain,
+            wf.temp,
+            wf.wind_speed,
+            wf.wind_dir,
+            g.home_team_id,
+            g.away_team_id,
+            s.name as stadium_name
+        FROM weather_forecasts wf
+        JOIN games g ON wf.game_id = g.id
+        LEFT JOIN stadiums s ON g.stadium_id = s.id
+        WHERE wf.rain >= 75
+        ORDER BY g.date ASC, g.time ASC;
+    """
+    try:
+        df = pd.read_sql(query, engine)
+        # Basic type conversion check
+        df['rain'] = pd.to_numeric(df['rain'], errors='coerce')
+        df['temp'] = pd.to_numeric(df['temp'], errors='coerce')
+        df['wind_speed'] = pd.to_numeric(df['wind_speed'], errors='coerce')
+        df['wind_dir'] = pd.to_numeric(df['wind_dir'], errors='coerce')
+        df = df.dropna(subset=['rain']) # Remove rows where rain couldn't be parsed
+        return df
+    except DatabaseError as e:
+        print(f"Database query error: {e}. Check if tables 'games' or 'stadiums' exist or have correct columns.")
+        return pd.DataFrame(columns=['game_id', 'game_date', 'game_time_utc', 'rain', 'temp', 'wind_speed', 'wind_dir', 'home_team_id', 'away_team_id', 'stadium_name'])
+    except Exception as e:
+        print(f"An unexpected error occurred during fetch_high_rain_games_details: {e}")
+        return pd.DataFrame(columns=['game_id', 'game_date', 'game_time_utc', 'rain', 'temp', 'wind_speed', 'wind_dir', 'home_team_id', 'away_team_id', 'stadium_name'])
 
 def generate_weather_report() -> str:
     """Generate a more user-friendly report of high-rain games, focusing on the date."""
@@ -558,11 +545,10 @@ def generate_sealed_cards_report(username: str) -> str:
     """
 
     report = []
-    db_path = Config.DB_PATH
     
     try:
         # Connect to database
-        conn = sqlite3.connect(db_path)
+        conn = get_db_connection()
         cursor = conn.cursor()
         
         # Get current date
@@ -592,8 +578,8 @@ def generate_sealed_cards_report(username: str) -> str:
                AVG(ap.sorare_score) as avg_projected_score,
                MIN(ap.game_date) as next_game_date
         FROM cards c
-        JOIN AdjustedProjections ap ON c.name = ap.player_name
-        WHERE c.username = ? AND c.sealed = 1 AND ap.game_date >= ?
+        JOIN adjustedarojections ap ON c.name = ap.player_name
+        WHERE c.username = %s AND c.sealed = TRUE AND ap.game_date >= %s
         GROUP BY c.slug, c.name, c.year, c.rarity, c.positions
         ORDER BY next_game_date ASC
         """
@@ -625,7 +611,7 @@ def generate_sealed_cards_report(username: str) -> str:
                i.description, i.return_estimate, i.team
         FROM cards c
         JOIN injuries i ON c.name = i.player_name
-        WHERE c.username = ? AND c.sealed = 1 AND i.return_estimate IS NOT NULL
+        WHERE c.username = %s AND c.sealed = TRUE AND i.return_estimate IS NOT NULL
         """
         
         cursor.execute(query, (username,))
@@ -671,10 +657,9 @@ def generate_sealed_cards_report(username: str) -> str:
             report.append("No injured sealed cards found.")
         
         report.append("\n" + "=" * 80)
+        cursor.close()
         conn.close()
         
-    except sqlite3.Error as e:
-        report.append(f"Database error: {e}")
     except Exception as e:
         report.append(f"Error: {e}")
         

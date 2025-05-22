@@ -6,35 +6,36 @@ import time
 from flask import Flask, render_template, request, jsonify, send_file,  redirect, url_for
 import pandas as pd
 from datetime import datetime, timedelta, date
-import sqlite3
 import math
 import numpy as np
 import pytz
 
 # Import existing functionality
 from chatgpt_lineup_optimizer import (
-    fetch_cards, fetch_projections, build_all_lineups, 
-    Config, get_db_connection,
+    fetch_cards, fetch_projections, build_all_lineups,
+    Config,
     fetch_high_rain_games_details
 )
 from card_fetcher import SorareMLBClient
 from injury_updates import fetch_injury_data, update_database
 from grok_ballpark_factor import (
-    main as update_projections, 
+    main as update_projections,
     determine_game_week,
     get_schedule,
-    fetch_weather_and_store
+    fetch_weather_and_store,
+    init_db # Note: init_db might need review if it's SQLite-specific
 )
 from utils import (
-    DATABASE_FILE, 
-    get_wind_effect, 
-    get_wind_effect_label, 
+    get_db_connection,
+    get_wind_effect,
+    get_wind_effect_label,
     get_temp_adjustment,
     calculate_hr_factors,
     get_weather_summary,
     get_top_hr_players
 )
 import logging
+import psycopg2 # Import psycopg2 for specific error handling
 
 # Initialize Flask app
 app = Flask(__name__)
@@ -44,6 +45,7 @@ app.jinja_env.globals.update(zip=zip)
 
 # Script directory for running updates
 script_dir = os.path.dirname(os.path.abspath(__file__))
+
 
 # Default lineup parameters (same as in discord_bot.py)
 DEFAULT_ENERGY_LIMITS = {"rare": 50, "limited": 50}
@@ -55,7 +57,6 @@ DEFAULT_LINEUP_ORDER = [
     "Rare All-Star_1", "Rare All-Star_2", "Rare All-Star_3",
     "Rare Challenger_1", "Rare Challenger_2",
     "Limited All-Star_1", "Limited All-Star_2", "Limited All-Star_3",
-    "Limited Challenger_1", "Limited Challenger_2",
     "Common Minors"
 ]
 
@@ -63,65 +64,55 @@ DEFAULT_LINEUP_ORDER = [
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-# Debugging info
-logging.info(f"Current working directory: {os.getcwd()}")
-logging.info(f"DATABASE_FILE path: {DATABASE_FILE}")
-logging.info(f"Directory portion: {os.path.dirname(DATABASE_FILE)}")
-
-# Check directory permissions
-if os.path.dirname(DATABASE_FILE):
-    if not os.path.exists(os.path.dirname(DATABASE_FILE)):
-        logging.info(f"Directory does not exist, creating: {os.path.dirname(DATABASE_FILE)}")
-        os.makedirs(os.path.dirname(DATABASE_FILE), exist_ok=True)
-    
-    test_permissions = os.access(os.path.dirname(DATABASE_FILE), os.W_OK)
-    logging.info(f"Directory is writable: {test_permissions}")
 
 def check_and_create_db():
     """Check if database exists and create it if not"""
-    # Use the same database path as the rest of the application
-    db_path = DATABASE_FILE
-    
-    if not os.path.exists(db_path):
-        # Database doesn't exist, need to create and populate it
-        # Make sure the directory exists
-        os.makedirs(os.path.dirname(db_path), exist_ok=True)
-        return False
-    
+
     # Check if required tables exist
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
-        
-        # Check for existence of required tables
+
+        # Check for existence of required tables in PostgreSQL
         tables_query = """
-        SELECT name FROM sqlite_master 
-        WHERE type='table' AND name IN ('hitters_vs_rhp_per_game', 'hitters_vs_lhp_per_game', 'hitters_per_game', 'pitchers_per_game', 'ParkFactors', 'Stadiums')
+        SELECT table_name FROM information_schema.tables
+        WHERE table_schema = 'public'
+          AND table_name IN ('hitters_vs_rhp_per_game', 'hitters_vs_lhp_per_game', 'hitters_per_game', 'pitchers_per_game', 'park_factors', 'stadiums')
         """
-        tables = cursor.execute(tables_query).fetchall()
+        cursor.execute(tables_query)
+        tables = cursor.fetchall()
         table_names = [t[0] for t in tables]
-        
-        required_tables = ['hitters_vs_rhp_per_game', 'hitters_vs_lhp_per_game', 'hitters_per_game', 'pitchers_per_game', 'ParkFactors', 'Stadiums']
+
+        # Ensure all tables that are typically populated by the update process are present
+        required_tables = [
+            'hitters_vs_rhp_per_game', 'hitters_vs_lhp_per_game', 'hitters_per_game',
+            'pitchers_per_game', 'park_factors', 'stadiums'
+        ]
         missing_tables = [table for table in required_tables if table not in table_names]
-        
+
         conn.close()
         
         if missing_tables:
+            print(f"Missing tables: {missing_tables}")
             return False
         return True
-    except Exception:
-        # Error accessing database, likely needs to be created
+    except psycopg2.Error as e:
+        print(f"Database connection error during check_and_create_db: {e}")
         return False
+    except Exception as e:
+        print(f"An unexpected error occurred during check_and_create_db: {e}")
+        return False
+
 
 def run_full_update():
     """Run all update scripts to refresh the database"""
     try:
 
-        create_teams_table()
+        create_teams_table() # Ensure Teams table is created first
 
         # Step 1: Run fangraph_fetcher to download CSVs
         print("Running fangraph_fetcher.py...")
-        subprocess.run(["python3", os.path.join(script_dir, "fangraph_fetcher.py")], check=True)
+        #subprocess.run(["python3", os.path.join(script_dir, "fangraph_fetcher.py")], check=True)
 
         # Optional delay if needed
         time.sleep(5)
@@ -133,23 +124,26 @@ def run_full_update():
         # Optional delay
         time.sleep(2)
 
-        # Step 3: Run depth_projection to process CSVs into SQLite DB
+        # Step 3: Run depth_projection to process CSVs into PostgreSQL DB
         print("Running depth_projection.py...")
-        subprocess.run(["python3", os.path.join(script_dir, "depth_projection.py")], check=True)
+        #subprocess.run(["python3", os.path.join(script_dir, "depth_projection.py")], check=True)
 
         # Step 4: Run update_stadiums to ensure stadium data is current
         print("Running update_stadiums.py...")
         subprocess.run(["python3", os.path.join(script_dir, "update_stadiums.py")], check=True)
-        
+
         # Step 5: Update injury data
         injury_data = fetch_injury_data()
         if injury_data:
             update_database(injury_data)
-        
+
         # Step 6: Update projections using existing function
         update_projections()
 
         return True
+    except subprocess.CalledProcessError as e:
+        print(f"Subprocess failed: {e.cmd} exited with code {e.returncode}. Output: {e.output.decode()}")
+        return False
     except Exception as e:
         print(f"Error during full update: {str(e)}")
         return False
@@ -158,35 +152,39 @@ def add_team_names_to_games(high_rain_games):
     """Add team names to a DataFrame of games"""
     if high_rain_games.empty:
         return high_rain_games
-        
+
     try:
         conn = get_db_connection()
+        cursor = conn.cursor()
         # Get home team names
         for i, game in high_rain_games.iterrows():
             home_team_id = game['home_team_id']
             away_team_id = game['away_team_id']
-            
+
             # Get home team name
-            home_team_query = "SELECT name FROM Teams WHERE id = ?"
-            home_team_name = conn.execute(home_team_query, (home_team_id,)).fetchone()
+            home_team_query = "SELECT name FROM Teams WHERE id = %s"
+            cursor.execute(home_team_query, (home_team_id,))
+            home_team_name = cursor.fetchone()
             high_rain_games.at[i, 'home_team_name'] = home_team_name[0] if home_team_name else f"Team {home_team_id}"
-            
+
             # Get away team name
-            away_team_query = "SELECT name FROM Teams WHERE id = ?"
-            away_team_name = conn.execute(away_team_query, (away_team_id,)).fetchone()
+            away_team_query = "SELECT name FROM Teams WHERE id = %s"
+            cursor.execute(away_team_query, (away_team_id,))
+            away_team_name = cursor.fetchone()
             high_rain_games.at[i, 'away_team_name'] = away_team_name[0] if away_team_name else f"Team {away_team_id}"
-        
+
+        cursor.close()
         conn.close()
     except Exception as e:
         print(f"Error adding team names: {e}")
-    
+
     return high_rain_games
-    
+
 def format_game_dates(high_rain_games):
     """Format game dates in a DataFrame of games"""
     if high_rain_games.empty:
         return high_rain_games
-        
+
     for i, game in high_rain_games.iterrows():
         try:
             # Parse the date string (assuming YYYY-MM-DD format from DB)
@@ -195,534 +193,14 @@ def format_game_dates(high_rain_games):
             high_rain_games.at[i, 'game_date_formatted'] = game_date_obj.strftime("%a, %b %d, %Y")
         except Exception:
             high_rain_games.at[i, 'game_date_formatted'] = "Date Unknown"
-    
+
     return high_rain_games
 
-@app.route('/')
-def index():
-    """Render the main page with the lineup optimizer form"""
-    # Check if database exists and is properly set up
-    db_exists = check_and_create_db()
-    
-    # Fetch high rain games for weather report
-    try:
-        high_rain_games = fetch_high_rain_games_details()
-        
-        # Format game dates and add team names
-        high_rain_games = format_game_dates(high_rain_games)
-        high_rain_games = add_team_names_to_games(high_rain_games)
-    except Exception as e:
-        print(f"Error fetching weather data: {e}")
-        high_rain_games = pd.DataFrame()  # Empty DataFrame if error
-    
-    return render_template('index.html', 
-                          active_page='home', 
-                          game_week=determine_game_week(),
-                          default_rare_energy=DEFAULT_ENERGY_LIMITS["rare"],
-                          default_limited_energy=DEFAULT_ENERGY_LIMITS["limited"],
-                          default_boost_2025=BOOST_2025,
-                          default_stack_boost=STACK_BOOST,
-                          default_energy_per_card=ENERGY_PER_CARD,
-                          default_lineup_order=",".join(DEFAULT_LINEUP_ORDER),
-                          db_exists=db_exists,
-                          high_rain_games=high_rain_games)
-
-@app.route('/generate', methods=['POST'])
-def generate_lineup():
-    """Generate lineup based on form inputs and return HTML content"""
-    # Get form data
-    username = request.form.get('username')
-    rare_energy = int(request.form.get('rare_energy', DEFAULT_ENERGY_LIMITS["rare"]))
-    limited_energy = int(request.form.get('limited_energy', DEFAULT_ENERGY_LIMITS["limited"]))
-    boost_2025 = float(request.form.get('boost_2025', BOOST_2025))
-    stack_boost = float(request.form.get('stack_boost', STACK_BOOST))
-    energy_per_card = int(request.form.get('energy_per_card', ENERGY_PER_CARD))
-    lineup_order = request.form.get('lineup_order', ','.join(DEFAULT_LINEUP_ORDER))
-    ignore_players = request.form.get('ignore_players', '')
-    ignore_games = request.form.get('ignore_games', '')
-
-        # Server-side validation
-    if not username:
-        return jsonify({'error': "Sorare Username is required."}), 400
-    
-    try:
-        rare_energy = int(rare_energy)
-    except (ValueError, TypeError):
-        return jsonify({'error': "Rare Energy is required and must be a number."}), 400
-
-    try:
-        limited_energy = int(limited_energy)
-    except (ValueError, TypeError):
-        return jsonify({'error': "Limited Energy is required and must be a number."}), 400
-
-    try:
-        boost_2025 = float(boost_2025)
-    except (ValueError, TypeError):
-        return jsonify({'error': "2025 Card Boost is required and must be a number."}), 400
-
-    try:
-        stack_boost = float(stack_boost)
-    except (ValueError, TypeError):
-        return jsonify({'error': "Stack Boost is required and must be a number."}), 400
-
-    try:
-        energy_per_card = int(energy_per_card)
-    except (ValueError, TypeError):
-        return jsonify({'error': "Energy per card must be a number."}), 400
-    
-    # Parse ignore players list
-    ignore_list = []
-    if ignore_players:
-        ignore_list = [name.strip() for name in ignore_players.split(',') if name.strip()]
-    
-    # Parse ignore games list
-    ignore_game_ids = []
-    if ignore_games:
-        try:
-            ignore_game_ids = [int(game_id.strip()) for game in ignore_games.split(',') if (game_id := game.strip()).isdigit()]
-        except Exception as e:
-            return jsonify({'error': f"Error parsing game IDs: {str(e)}. Make sure all IDs are valid integers."})
-    
-    # Parse custom lineup order
-    try:
-        custom_lineup_order = [lineup.strip() for lineup in lineup_order.split(',')]
-        Config.PRIORITY_ORDER = custom_lineup_order
-    except Exception as e:
-        # Fallback to default order on error
-        Config.PRIORITY_ORDER = DEFAULT_LINEUP_ORDER
-        return jsonify({'error': f"Error parsing lineup order: {str(e)}. Using default order."})
-    
-    # Set energy limits
-    energy_limits = {
-        "rare": rare_energy,
-        "limited": limited_energy
-    }
-
-    if not username:
-        return jsonify({'error': "Username is required."})
-
-    try:
-        # FIRST: Fetch latest cards from Sorare API for this user
-        sorare_client = SorareMLBClient()
-        result = sorare_client.get_user_mlb_cards(username)
-        
-        if not result:
-            return jsonify({'error': f"Failed to fetch cards for user {username} from Sorare."})
-        
-        # THEN: Fetch cards from the database
-        cards_df = fetch_cards(username)
-        
-        # Pass ignore_game_ids to fetch_projections
-        projections_df = fetch_projections(ignore_game_ids=ignore_game_ids)
-        
-        if cards_df.empty:
-            return jsonify({'error': f"No eligible cards found for {username}."})
-        if projections_df.empty:
-            return jsonify({'error': f"No projections available for game week {determine_game_week()}. Update the database first."})
-        
-        # Generate lineups
-        lineups = build_all_lineups(
-            cards_df=cards_df,
-            projections_df=projections_df,
-            energy_limits=energy_limits,
-            boost_2025=boost_2025,
-            stack_boost=stack_boost,
-            energy_per_card=energy_per_card,
-            ignore_list=ignore_list
-        )
-        
-        # Calculate total energy used
-        total_energy_used = {"rare": 0, "limited": 0}
-        for lineup_type in Config.PRIORITY_ORDER:
-            data = lineups[lineup_type]
-            if data["cards"]:
-                total_energy_used["rare"] += data["energy_used"]["rare"]
-                total_energy_used["limited"] += data["energy_used"]["limited"]
-        
-        # Find players missing projections
-        merged = cards_df.merge(projections_df, left_on="name", right_on="player_name", how="left")
-        missing_projections = merged[merged["total_projection"].isna()]
-        missing_projections_list = []
-        
-        if not missing_projections.empty:
-            for _, row in missing_projections.iterrows():
-                missing_projections_list.append({"name": row['name'], "slug": row['slug']})
-        
-        # Fetch sealed cards data for the template
-        db_path = DATABASE_FILE
-        conn = sqlite3.connect(db_path)
-        
-        # Get current date and game week dates
-        current_date = datetime.now()
-        try:
-            current_game_week = determine_game_week()
-            # Parse the game week to get start and end dates
-            start_date_str, end_date_str = current_game_week.split("_to_")
-            start_date = datetime.strptime(start_date_str, "%Y-%m-%d")
-            end_date = datetime.strptime(end_date_str, "%Y-%m-%d")
-        except:
-            # Fallback to 7 days if game week format is unexpected
-            start_date = current_date
-            end_date = current_date + timedelta(days=7)
-        
-        # Part 1: Get sealed cards with projections
-        query = """
-        SELECT c.slug, c.name, c.year, c.rarity, c.positions, 
-               COUNT(ap.game_id) as game_count, 
-               SUM(ap.sorare_score) as total_projected_score,
-               AVG(ap.sorare_score) as avg_projected_score,
-               MIN(ap.game_date) as next_game_date
-        FROM cards c
-        JOIN AdjustedProjections ap ON c.name = ap.player_name
-        WHERE c.username = ? AND c.sealed = 1 AND ap.game_date >= ?
-        GROUP BY c.slug, c.name, c.year, c.rarity, c.positions
-        ORDER BY next_game_date ASC
-        """
-        
-        cursor = conn.cursor()
-        cursor.execute(query, (username, current_date.strftime('%Y-%m-%d')))
-        projection_results = cursor.fetchall()
-        
-        projections_df = None
-        if projection_results:
-            # Convert to DataFrame
-            columns = ['Slug', 'Name', 'Year', 'Rarity', 'Positions', 
-                      'Upcoming Games', 'Total Projected Score', 'Avg Score/Game', 'Next Game Date']
-            projections_df = pd.DataFrame(projection_results, columns=columns)
-            
-            # Format the dataframe - round the scores to 2 decimal places
-            projections_df['Total Projected Score'] = projections_df['Total Projected Score'].round(2)
-            projections_df['Avg Score/Game'] = projections_df['Avg Score/Game'].round(2)
-        
-        # Part 2: Get injured sealed cards
-        query = """
-        SELECT c.slug, c.name, c.year, c.rarity, c.positions, i.status, 
-               i.description, i.return_estimate, i.team
-        FROM cards c
-        JOIN injuries i ON c.name = i.player_name
-        WHERE c.username = ? AND c.sealed = 1 AND i.return_estimate IS NOT NULL
-        """
-        
-        cursor.execute(query, (username,))
-        injury_results = cursor.fetchall()
-        
-        injured_df = None
-        if injury_results:
-            # Filter injuries with return dates within game week
-            soon_returning = []
-            
-            for result in injury_results:
-                return_estimate = result[7]
-                
-                # Check if return_estimate contains a date string
-                try:
-                    # Try different date formats
-                    for date_format in ['%Y-%m-%d', '%m/%d/%Y', '%d-%m-%Y', '%d/%m/%Y']:
-                        try:
-                            return_date = datetime.strptime(return_estimate, date_format)
-                            if start_date <= return_date <= end_date:
-                                soon_returning.append(result)
-                            break
-                        except ValueError:
-                            continue
-                except:
-                    # If return_estimate isn't a date, check if it contains keywords
-                    # suggesting imminent return during the game week
-                    keywords = ['day to day', 'game time decision', 'probable', 
-                               'questionable', 'today', 'tomorrow', '1-3 days',
-                               'this week', 'expected back', 'returning']
-                    if any(keyword in return_estimate.lower() for keyword in keywords):
-                        soon_returning.append(result)
-            
-            if soon_returning:
-                columns = ['Slug', 'Name', 'Year', 'Rarity', 'Positions', 'Status', 
-                          'Description', 'Return Estimate', 'Team']
-                injured_df = pd.DataFrame(soon_returning, columns=columns)
-        
-        conn.close()
-        
-        # Render the template with all the necessary data
-        lineup_html = render_template(
-            'partials/lineup_results.html',
-            lineups=lineups,
-            energy_limits=energy_limits,
-            username=username,
-            boost_2025=boost_2025,
-            stack_boost=stack_boost,
-            energy_per_card=energy_per_card,
-            game_week=determine_game_week(),
-            priority_order=Config.PRIORITY_ORDER,
-            lineup_slots=Config.LINEUP_SLOTS,
-            total_energy_used=total_energy_used,
-            missing_projections=missing_projections_list,
-            current_date=current_date,
-            start_date=start_date,
-            end_date=end_date,
-            projections_df=projections_df,
-            injured_df=injured_df
-        )
-        
-        # Return success with HTML content
-        return jsonify({
-            'success': True,
-            'lineup_html': lineup_html,
-            'ignored_games': len(ignore_game_ids)
-        })
-        
-    except Exception as e:
-        return jsonify({'error': f"Error generating lineup: {str(e)}"})
-    
-@app.route('/platoon', methods=['GET', 'POST'])
-def platoon():
-    conn = get_db_connection()
-
-    c = conn.cursor()
-    # Create platoon_players table if it doesn't exist
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS platoon_players (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL,
-            mlbam_id INTEGER NOT NULL,
-            starts_vs TEXT CHECK(starts_vs IN ('R', 'L'))
-        )
-    ''')
-    conn.commit()
-
-    if request.method == 'POST':
-        name = request.form['name']
-        mlbam_id = request.form['mlbam_id']
-        starts_vs = request.form['starts_vs']
-        conn.execute(
-            'INSERT INTO platoon_players (name, mlbam_id, starts_vs) VALUES (?, ?, ?)',
-            (name, mlbam_id, starts_vs)
-        )
-        conn.commit()
-
-    players = conn.execute('SELECT id, name, starts_vs FROM platoon_players').fetchall()
-    name_id_pairs = conn.execute('''
-        SELECT DISTINCT Name, MLBAMID FROM hitters_per_game
-        WHERE MLBAMID IS NOT NULL
-    ''').fetchall()
-    conn.close()
-
-    return render_template('platoon.html', players=players, name_id_pairs=name_id_pairs)
-
-@app.route('/platoon/delete/<int:id>', methods=['POST'])
-def delete_platoon_player(id):
-    conn = get_db_connection()
-    conn.execute('DELETE FROM platoon_players WHERE id = ?', (id,))
-    conn.commit()
-    conn.close()
-    return redirect(url_for('platoon'))
-
-
-@app.route('/weather_report', methods=['GET'])
-def weather_report():
-    """Generate weather report HTML that can be cached"""
-    try:
-        # Use the same code from index route to get high rain games
-        high_rain_games = fetch_high_rain_games_details()
-        
-        # Format game dates and add team names
-        high_rain_games = format_game_dates(high_rain_games)
-        high_rain_games = add_team_names_to_games(high_rain_games)
-        
-        # Render the partial template directly
-        weather_html = render_template('partials/weather_report.html', high_rain_games=high_rain_games)
-        
-        return jsonify({
-            'success': True,
-            'weather_html': weather_html
-        })
-    except Exception as e:
-        return jsonify({'error': f"Error generating weather report: {str(e)}"})
-    
-@app.route('/fetch_cards', methods=['POST'])
-def fetch_user_cards():
-    username = request.form.get('username')
-    
-    if not username:
-        return jsonify({'error': "Username is required"})
-    
-    try:
-        sorare_client = SorareMLBClient()
-        result = sorare_client.get_user_mlb_cards(username)
-        
-        if result:
-            return jsonify({
-                'success': True,
-                'message': f"Successfully fetched {len(result['cards'])} cards for {username}",
-                'card_count': len(result['cards'])
-            })
-        else:
-            return jsonify({'error': f"Failed to fetch cards for {username}"})
-    except Exception as e:
-        return jsonify({'error': f"Error fetching cards: {str(e)}"})
-
-@app.route('/download_lineup/<username>')
-def download_lineup(username):
-    """Allow downloading the generated lineup file"""
-    filename = f"lineups/{username}.txt"
-    if os.path.exists(filename):
-        return send_file(filename, as_attachment=True)
-    else:
-        return "Lineup file not found. Please generate it first.", 404
-
-def check_if_projections_exist(game_week_id):
-    """Check if projections already exist for a specific game week"""
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
-        # Check if there are any AdjustedProjections for this game week
-        query = "SELECT COUNT(*) FROM AdjustedProjections WHERE game_week = ?"
-        result = cursor.execute(query, (game_week_id,)).fetchone()
-        conn.close()
-        
-        # If count is greater than 0, projections exist
-        return result[0] > 0
-    except Exception as e:
-        print(f"Error checking projections: {str(e)}")
-        return False
-
-@app.route('/update_data', methods=['POST'])
-def update_data():
-    """Update injury data and projections"""
-    try:
-        # Check if database exists and create it if needed
-        db_exists = check_and_create_db()
-        
-        # Determine current game week
-        current_game_week = determine_game_week()
-        
-        if not db_exists:
-            # Database doesn't exist, run full update
-            success = run_full_update()
-            if not success:
-                return jsonify({'error': "Failed to initialize database. Check logs for details."})
-        else:
-            # Check if projections exist for the current game week
-            projections_exist = check_if_projections_exist(current_game_week)
-            
-            if not projections_exist:
-                # First time for this game week - run full update
-                print(f"No projections found for game week {current_game_week} - running full update")
-                success = run_full_update()
-                if not success:
-                    return jsonify({'error': "Failed to run full update. Check logs for details."})
-            else:
-                # Just update injury data and projections
-                print(f"Updating existing projections for game week {current_game_week}")
-                injury_data = fetch_injury_data()
-                if injury_data:
-                    update_database(injury_data)
-                
-                # Update projections
-                update_projections()
-        
-        return jsonify({
-            'success': True,
-            'message': f"Data updated successfully for game week {current_game_week}."
-        })
-    except Exception as e:
-        return jsonify({'error': f"Error updating data: {str(e)}"})
-
-@app.route('/check_db')
-def check_db():
-    """Check database connection and return status"""
-    try:
-        db_exists = check_and_create_db()
-        
-        if not db_exists:
-            return jsonify({
-                'status': 'missing',
-                'message': 'Database does not exist or is missing required tables. Run update to initialize.'
-            })
-        
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
-        # Check for existence of required tables
-        tables_query = """
-        SELECT name FROM sqlite_master 
-        WHERE type='table' AND name IN ('AdjustedProjections', 'injuries', 'PlayerTeams')
-        """
-        tables = cursor.execute(tables_query).fetchall()
-        table_names = [t[0] for t in tables]
-       
-        required_tables = ['AdjustedProjections', 'injuries', 'PlayerTeams']
-        missing_tables = [table for table in required_tables if table not in table_names]
-        
-        # Get game week info
-        game_week = determine_game_week()
-
-        if missing_tables:
-            return jsonify({
-                'status': 'missing',
-                'message': 'Game week info missing. Run update injuries and projections.'
-            })
-        
-        # Get count of projections for current game week
-        proj_count = cursor.execute(
-            "SELECT COUNT(*) FROM AdjustedProjections WHERE game_week = ?", 
-            (game_week,)
-        ).fetchone()[0]
-        
-        conn.close()
-
-        # ✅ Get the DB last modified time
-        if os.path.exists(DATABASE_FILE):
-            db_modified = datetime.fromtimestamp(os.path.getmtime(DATABASE_FILE)).strftime("%Y-%m-%d %H:%M")
-        else:
-            db_modified = "Unknown"
-        
-        return jsonify({
-            'status': 'connected',
-            'tables': table_names,
-            'game_week': game_week,
-            'projection_count': proj_count,
-            'projections_exist': proj_count > 0,
-            'needs_full_update': proj_count == 0,
-            'last_updated': db_modified
-        })
-    except Exception as e:
-        return jsonify({
-            'status': 'error',
-            'message': str(e)
-        })
-
-@app.route('/run_full_update', methods=['POST'])
-def full_update_route():
-    """Trigger a full update of the database from scratch"""
-    try:
-        success = run_full_update()
-        if success:
-            return jsonify({
-                'success': True,
-                'message': "Full database update completed successfully."
-            })
-        else:
-            return jsonify({
-                'error': "Failed to complete full database update. Check logs for details."
-            })
-    except Exception as e:
-        return jsonify({'error': f"Error during full update: {str(e)}"})
-
 def create_teams_table():
-    """Create and populate the Teams table if it doesn't exist"""
-    conn = sqlite3.connect(DATABASE_FILE)
+    """Create and populate the Teams table if it doesn't exist, and add missing columns."""
+    conn = get_db_connection()
     c = conn.cursor()
-    
-    # Create Teams table if it doesn't exist
-    c.execute('''CREATE TABLE IF NOT EXISTS Teams 
-                 (id INTEGER PRIMARY KEY, name TEXT, abbreviation TEXT)''')
-    
-    # Check if table is empty
-    count = c.execute("SELECT COUNT(*) FROM Teams").fetchone()[0]
-    
-    if count == 0:
-        # MLB team data
-        teams = [
+    teams = [
             (108, "Los Angeles Angels", "LAA"),
             (109, "Arizona Diamondbacks", "ARI"),
             (110, "Baltimore Orioles", "BAL"),
@@ -754,99 +232,723 @@ def create_teams_table():
             (147, "New York Yankees", "NYY"),
             (158, "Milwaukee Brewers", "MIL")
         ]
+
+    # Create Teams table if it doesn't exist (PostgreSQL syntax)
+    c.execute('''CREATE TABLE IF NOT EXISTS teams
+                 (id INTEGER PRIMARY KEY, name TEXT UNIQUE, abbreviation TEXT)''') # Removed abbreviation here for IF NOT EXISTS
+    conn.commit() # Commit the creation of the table before checking columns
+
+    # Check if table is empty (or populate if abbreviation is new)
+    c.execute("SELECT COUNT(*) FROM teams")
+    result = c.fetchone()
+    count = result[0] if result is not None else 0
+
+    if count == 0: # Only populate if the table is truly empty
+        # MLB team data
         
-        # Insert team data
-        c.executemany("INSERT INTO Teams (id, name, abbreviation) VALUES (?, ?, ?)", teams)
+        # Insert team data (PostgreSQL syntax for ON CONFLICT)
+        for team_id, name, abbreviation in teams:
+            try:
+                c.execute("""
+                    INSERT INTO teams (id, name, abbreviation)
+                    VALUES (%s, %s, %s)
+                    ON CONFLICT (id) DO UPDATE SET
+                        name = EXCLUDED.name,
+                        abbreviation = EXCLUDED.abbreviation;
+                """, (team_id, name, abbreviation))
+            except psycopg2.IntegrityError as e:
+                print(f"Skipping duplicate or integrity error for team {name}: {e}")
+                conn.rollback() # Rollback on error
+            except Exception as e:
+                print(f"Error inserting team {name}: {e}")
+                conn.rollback() # Rollback on other errors
+                continue
         conn.commit()
         print(f"Populated Teams table with {len(teams)} MLB teams")
-    
+    else:
+        print("Teams table already populated. Checking for abbreviation updates.")
+        # If table is not empty, ensure all existing entries have abbreviations updated
+        
+        for team_id, name, abbreviation in teams:
+            try:
+                c.execute("""
+                    INSERT INTO teams (id, name, abbreviation)
+                    VALUES (%s, %s, %s)
+                    ON CONFLICT (id) DO UPDATE SET
+                        name = EXCLUDED.name,
+                        abbreviation = EXCLUDED.abbreviation;
+                """, (team_id, name, abbreviation))
+            except psycopg2.IntegrityError as e:
+                print(f"Skipping duplicate or integrity error for team {name}: {e}")
+                conn.rollback() # Rollback on error
+            except Exception as e:
+                print(f"Error updating team {name}: {e}")
+                conn.rollback() # Rollback on other errors
+                continue
+        conn.commit()
+
+
+    c.close()
     conn.close()
+
+def get_team_name(conn, team_id):
+    """Get the team name from the team ID"""
+    try:
+        c = conn.cursor()
+        c.execute("SELECT name FROM teams WHERE id = %s", (team_id,))
+        result = c.fetchone()
+        c.close()
+        return result[0] if result else f"Team {team_id}"
+    except Exception as e:
+        print(f"Error fetching team name for ID {team_id}: {e}")
+        return f"Team {team_id}"
+
+def get_team_abbrev(conn, team_id):
+    """Get the team abbreviation from the team ID"""
+    try:
+        c = conn.cursor()
+        c.execute("SELECT abbreviation FROM teams WHERE id = %s", (team_id,))
+        result = c.fetchone()
+        c.close()
+        return result[0] if result else f"T{team_id}"
+    except Exception as e:
+        print(f"Error fetching team abbreviation for ID {team_id}: {e}")
+        return f"T{team_id}"
+
+def get_ballpark_name(conn, stadium_id):
+    """Get the ballpark name from the stadium ID"""
+    try:
+        c = conn.cursor()
+        c.execute("SELECT name FROM stadiums WHERE id = %s", (stadium_id,))
+        result = c.fetchone()
+        c.close()
+        return result[0] if result else f"Stadium {stadium_id}"
+    except Exception as e:
+        print(f"Error fetching stadium name for ID {stadium_id}: {e}")
+        return f"Stadium {stadium_id}"
+
+@app.route('/')
+def index():
+    """Render the main page with the lineup optimizer form"""
+    # Check if database exists and is properly set up
+    db_exists = check_and_create_db()
+    print(f"Database exists: {db_exists}")
+    # Fetch high rain games for weather report
+    try:
+        high_rain_games = fetch_high_rain_games_details()
+
+        # Format game dates and add team names
+        high_rain_games = format_game_dates(high_rain_games)
+        high_rain_games = add_team_names_to_games(high_rain_games)
+    except Exception as e:
+        print(f"Error fetching weather data: {e}")
+        high_rain_games = pd.DataFrame()  # Empty DataFrame if error
+
+    return render_template('index.html',
+                          active_page='home',
+                          game_week=determine_game_week(),
+                          default_rare_energy=DEFAULT_ENERGY_LIMITS["rare"],
+                          default_limited_energy=DEFAULT_ENERGY_LIMITS["limited"],
+                          default_boost_2025=BOOST_2025,
+                          default_stack_boost=STACK_BOOST,
+                          default_energy_per_card=ENERGY_PER_CARD,
+                          default_lineup_order=",".join(DEFAULT_LINEUP_ORDER),
+                          db_exists=db_exists,
+                          high_rain_games=high_rain_games)
+
+@app.route('/generate', methods=['POST'])
+def generate_lineup():
+    """Generate lineup based on form inputs and return HTML content"""
+    # Get form data
+    username = request.form.get('username')
+    rare_energy = int(request.form.get('rare_energy', DEFAULT_ENERGY_LIMITS["rare"]))
+    limited_energy = int(request.form.get('limited_energy', DEFAULT_ENERGY_LIMITS["limited"]))
+    boost_2025 = float(request.form.get('boost_2025', BOOST_2025))
+    stack_boost = float(request.form.get('stack_boost', STACK_BOOST))
+    energy_per_card = int(request.form.get('energy_per_card', ENERGY_PER_CARD))
+    lineup_order = request.form.get('lineup_order', ','.join(DEFAULT_LINEUP_ORDER))
+    ignore_players = request.form.get('ignore_players', '')
+    ignore_games = request.form.get('ignore_games', '')
+
+        # Server-side validation
+    if not username:
+        return jsonify({'error': "Sorare Username is required."}), 400
+
+    try:
+        rare_energy = int(rare_energy)
+    except (ValueError, TypeError):
+        return jsonify({'error': "Rare Energy is required and must be a number."}), 400
+
+    try:
+        limited_energy = int(limited_energy)
+    except (ValueError, TypeError):
+        return jsonify({'error': "Limited Energy is required and must be a number."}), 400
+
+    try:
+        boost_2025 = float(boost_2025)
+    except (ValueError, TypeError):
+        return jsonify({'error': "2025 Card Boost is required and must be a number."}), 400
+
+    try:
+        stack_boost = float(stack_boost)
+    except (ValueError, TypeError):
+        return jsonify({'error': "Stack Boost is required and must be a number."}), 400
+
+    try:
+        energy_per_card = int(energy_per_card)
+    except (ValueError, TypeError):
+        return jsonify({'error': "Energy per card must be a number."}), 400
+
+    # Parse ignore players list
+    ignore_list = []
+    if ignore_players:
+        ignore_list = [name.strip() for name in ignore_players.split(',') if name.strip()]
+
+    # Parse ignore games list
+    ignore_game_ids = []
+    if ignore_games:
+        try:
+            ignore_game_ids = [int(game_id.strip()) for game in ignore_games.split(',') if (game_id := game.strip()).isdigit()]
+        except Exception as e:
+            return jsonify({'error': f"Error parsing game IDs: {str(e)}. Make sure all IDs are valid integers."})
+
+    # Parse custom lineup order
+    try:
+        custom_lineup_order = [lineup.strip() for lineup in lineup_order.split(',')]
+        Config.PRIORITY_ORDER = custom_lineup_order
+    except Exception as e:
+        # Fallback to default order on error
+        Config.PRIORITY_ORDER = DEFAULT_LINEUP_ORDER
+        return jsonify({'error': f"Error parsing lineup order: {str(e)}. Using default order."})
+
+    # Set energy limits
+    energy_limits = {
+        "rare": rare_energy,
+        "limited": limited_energy
+    }
+
+    if not username:
+        return jsonify({'error': "Username is required."})
+
+    try:
+        # FIRST: Fetch latest cards from Sorare API for this user
+        sorare_client = SorareMLBClient()
+        result = sorare_client.get_user_mlb_cards(username)
+
+        if not result:
+            return jsonify({'error': f"Failed to fetch cards for user {username} from Sorare."})
+
+        # THEN: Fetch cards from the database
+        cards_df = fetch_cards(username)
+
+        # Pass ignore_game_ids to fetch_projections
+        projections_df = fetch_projections(ignore_game_ids=ignore_game_ids)
+
+        if cards_df.empty:
+            return jsonify({'error': f"No eligible cards found for {username}."})
+        if projections_df.empty:
+            return jsonify({'error': f"No projections available for game week {determine_game_week()}. Update the database first."})
+
+        # Generate lineups
+        lineups = build_all_lineups(
+            cards_df=cards_df,
+            projections_df=projections_df,
+            energy_limits=energy_limits,
+            boost_2025=boost_2025,
+            stack_boost=stack_boost,
+            energy_per_card=energy_per_card,
+            ignore_list=ignore_list
+        )
+
+        # Calculate total energy used
+        total_energy_used = {"rare": 0, "limited": 0}
+        for lineup_type in Config.PRIORITY_ORDER:
+            data = lineups[lineup_type]
+            if data["cards"]:
+                total_energy_used["rare"] += data["energy_used"]["rare"]
+                total_energy_used["limited"] += data["energy_used"]["limited"]
+
+        # Find players missing projections
+        merged = cards_df.merge(projections_df, left_on="name", right_on="player_name", how="left")
+        missing_projections = merged[merged["total_projection"].isna()]
+        missing_projections_list = []
+
+        if not missing_projections.empty:
+            for _, row in missing_projections.iterrows():
+                missing_projections_list.append({"name": row['name'], "slug": row['slug']})
+
+        # Fetch sealed cards data for the template
+
+        conn = get_db_connection()
+
+        # Get current date and game week dates
+        current_date = datetime.now()
+        try:
+            current_game_week = determine_game_week()
+            # Parse the game week to get start and end dates
+            start_date_str, end_date_str = current_game_week.split("_to_")
+            start_date = datetime.strptime(start_date_str, "%Y-%m-%d")
+            end_date = datetime.strptime(end_date_str, "%Y-%m-%d")
+        except Exception:
+            # Fallback to 7 days if game week format is unexpected
+            start_date = current_date
+            end_date = current_date + timedelta(days=7)
+
+        # Part 1: Get sealed cards with projections
+        query = """
+        SELECT c.slug, c.name, c.year, c.rarity, c.positions,
+               COUNT(ap.game_id) as game_count,
+               SUM(ap.sorare_score) as total_projected_score,
+               AVG(ap.sorare_score) as avg_projected_score,
+               MIN(ap.game_date) as next_game_date
+        FROM cards c
+        JOIN adjusted_projections ap ON c.name = ap.player_name
+        WHERE c.username = %s AND c.sealed = TRUE AND ap.game_date >= %s
+        GROUP BY c.slug, c.name, c.year, c.rarity, c.positions
+        ORDER BY next_game_date ASC
+        """
+
+        cursor = conn.cursor()
+        cursor.execute(query, (username, current_date.strftime('%Y-%m-%d')))
+        projection_results = cursor.fetchall()
+
+        projections_df = None
+        if projection_results:
+            # Convert to DataFrame
+            columns = ['Slug', 'Name', 'Year', 'Rarity', 'Positions',
+                      'Upcoming Games', 'Total Projected Score', 'Avg Score/Game', 'Next Game Date']
+            projections_df = pd.DataFrame(projection_results, columns=columns)
+
+            # Format the dataframe - round the scores to 2 decimal places
+            projections_df['Total Projected Score'] = projections_df['Total Projected Score'].round(2)
+            projections_df['Avg Score/Game'] = projections_df['Avg Score/Game'].round(2)
+
+        # Part 2: Get injured sealed cards
+        query = """
+        SELECT c.slug, c.name, c.year, c.rarity, c.positions, i.status,
+               i.description, i.return_estimate, i.team
+        FROM cards c
+        JOIN injuries i ON c.name = i.player_name
+        WHERE c.username = %s AND c.sealed = TRUE AND i.return_estimate IS NOT NULL
+        """
+
+        cursor.execute(query, (username,))
+        injury_results = cursor.fetchall()
+
+        injured_df = None
+        if injury_results:
+            # Filter injuries with return dates within game week
+            soon_returning = []
+
+            for result in injury_results:
+                return_estimate = result[7]
+
+                # Check if return_estimate contains a date string
+                try:
+                    # Try different date formats
+                    for date_format in ['%Y-%m-%d', '%m/%d/%Y', '%d-%m-%Y', '%d/%m/%Y']:
+                        try:
+                            return_date = datetime.strptime(return_estimate, date_format)
+                            if start_date <= return_date <= end_date:
+                                soon_returning.append(result)
+                            break
+                        except ValueError:
+                            continue
+                except Exception: # Catch all exceptions if return_estimate is not a date string
+                    # If return_estimate isn't a date, check if it contains keywords
+                    # suggesting imminent return during the game week
+                    keywords = ['day to day', 'game time decision', 'probable',
+                               'questionable', 'today', 'tomorrow', '1-3 days',
+                               'this week', 'expected back', 'returning']
+                    if any(keyword in str(return_estimate).lower() for keyword in keywords):
+                        soon_returning.append(result)
+
+            if soon_returning:
+                columns = ['Slug', 'Name', 'Year', 'Rarity', 'Positions', 'Status',
+                          'Description', 'Return Estimate', 'Team']
+                injured_df = pd.DataFrame(soon_returning, columns=columns)
+
+        conn.close()
+
+        # Render the template with all the necessary data
+        lineup_html = render_template(
+            'partials/lineup_results.html',
+            lineups=lineups,
+            energy_limits=energy_limits,
+            username=username,
+            boost_2025=boost_2025,
+            stack_boost=stack_boost,
+            energy_per_card=energy_per_card,
+            game_week=determine_game_week(),
+            priority_order=Config.PRIORITY_ORDER,
+            lineup_slots=Config.LINEUP_SLOTS,
+            total_energy_used=total_energy_used,
+            missing_projections=missing_projections_list,
+            current_date=current_date,
+            start_date=start_date,
+            end_date=end_date,
+            projections_df=projections_df,
+            injured_df=injured_df
+        )
+
+        # Return success with HTML content
+        return jsonify({
+            'success': True,
+            'lineup_html': lineup_html,
+            'ignored_games': len(ignore_game_ids)
+        })
+
+    except Exception as e:
+        return jsonify({'error': f"Error generating lineup: {str(e)}"})
+
+@app.route('/platoon', methods=['GET', 'POST'])
+def platoon():
+    conn = get_db_connection()
+    c = conn.cursor()
+
+    # Create platoon_players table if it doesn't exist (PostgreSQL syntax)
+
+    if request.method == 'POST':
+        name = request.form['name']
+        mlbam_id = request.form['mlbam_id']
+        starts_vs = request.form['starts_vs']
+        try:
+            # Use %s placeholders for PostgreSQL
+            c.execute(
+                'INSERT INTO platoon_players (name, mlbam_id, starts_vs) VALUES (%s, %s, %s) ON CONFLICT (mlbam_id) DO UPDATE SET name = EXCLUDED.name, starts_vs = EXCLUDED.starts_vs',
+                (name, mlbam_id, starts_vs)
+            )
+            conn.commit()
+        except psycopg2.Error as e:
+            conn.rollback()
+            print(f"Error inserting/updating platoon player: {e}")
+
+
+    c.execute('SELECT id, name, starts_vs FROM platoon_players')
+    players = c.fetchall()
+    c.execute('''
+        SELECT DISTINCT Name, MLBAMID FROM hitters_per_game
+        WHERE MLBAMID IS NOT NULL
+    ''')
+    name_id_pairs = c.fetchall()
+    conn.close()
+
+    return render_template('platoon.html', players=players, name_id_pairs=name_id_pairs)
+
+@app.route('/platoon/delete/<int:id>', methods=['POST'])
+def delete_platoon_player(id):
+    conn = get_db_connection()
+    c = conn.cursor()
+    try:
+        # Use %s placeholder for PostgreSQL
+        c.execute('DELETE FROM platoon_players WHERE id = %s', (id,))
+        conn.commit()
+    except psycopg2.Error as e:
+        conn.rollback()
+        print(f"Error deleting platoon player: {e}")
+    finally:
+        conn.close()
+    return redirect(url_for('platoon'))
+
+
+@app.route('/weather_report', methods=['GET'])
+def weather_report():
+    """Generate weather report HTML that can be cached"""
+    try:
+        # Use the same code from index route to get high rain games
+        high_rain_games = fetch_high_rain_games_details()
+
+        # Format game dates and add team names
+        high_rain_games = format_game_dates(high_rain_games)
+        high_rain_games = add_team_names_to_games(high_rain_games)
+
+        # Render the partial template directly
+        weather_html = render_template('partials/weather_report.html', high_rain_games=high_rain_games)
+
+        return jsonify({
+            'success': True,
+            'weather_html': weather_html
+        })
+    except Exception as e:
+        return jsonify({'error': f"Error generating weather report: {str(e)}"})
+
+@app.route('/fetch_cards', methods=['POST'])
+def fetch_user_cards():
+    username = request.form.get('username')
+
+    if not username:
+        return jsonify({'error': "Username is required"})
+
+    try:
+        sorare_client = SorareMLBClient()
+        result = sorare_client.get_user_mlb_cards(username)
+
+        if result:
+            return jsonify({
+                'success': True,
+                'message': f"Successfully fetched {len(result['cards'])} cards for {username}",
+                'card_count': len(result['cards'])
+            })
+        else:
+            return jsonify({'error': f"Failed to fetch cards for {username}"})
+    except Exception as e:
+        return jsonify({'error': f"Error fetching cards: {str(e)}"})
+
+@app.route('/download_lineup/<username>')
+def download_lineup(username):
+    """Allow downloading the generated lineup file"""
+    filename = f"lineups/{username}.txt"
+    if os.path.exists(filename):
+        return send_file(filename, as_attachment=True)
+    else:
+        return "Lineup file not found. Please generate it first.", 404
+
+def check_if_projections_exist(game_week_id):
+    """Check if projections already exist for a specific game week"""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        # Check if there are any adjusted_projections for this game week
+        query = "SELECT COUNT(*) FROM adjusted_projections WHERE game_week = %s"
+
+        cursor.execute(query, (game_week_id,))
+        result = cursor.fetchone()
+        conn.close()
+
+        # If count is greater than 0, projections exist
+        if result is not None:
+            return result[0] > 0
+        else:
+            return False
+    except Exception as e:
+        print(f"Error checking projections: {str(e)}")
+        return False
+
+@app.route('/update_data', methods=['POST'])
+def update_data():
+    """Update injury data and projections"""
+    try:
+        # Check if database exists and create it if needed
+        db_exists = check_and_create_db()
+        print(f"Database exists update_data: {db_exists}")
+        # Determine current game week
+        current_game_week = determine_game_week()
+
+        if not db_exists:
+            # Database doesn't exist, run full update
+            success = run_full_update()
+            if not success:
+                return jsonify({'error': "Failed to initialize database. Check logs for details."})
+        else:
+            # Check if projections exist for the current game week
+            projections_exist = check_if_projections_exist(current_game_week)
+
+            if not projections_exist:
+                # First time for this game week - run full update
+                print(f"No projections found for game week {current_game_week} - running full update")
+                success = run_full_update()
+                if not success:
+                    return jsonify({'error': "Failed to run full update. Check logs for details."})
+            else:
+                # Just update injury data and projections
+                print(f"Updating existing projections for game week {current_game_week}")
+                injury_data = fetch_injury_data()
+                if injury_data:
+                    update_database(injury_data)
+
+                # Update projections
+                update_projections()
+
+        return jsonify({
+            'success': True,
+            'message': f"Data updated successfully for game week {current_game_week}."
+        })
+    except Exception as e:
+        return jsonify({'error': f"Error updating data: {str(e)}"})
+
+@app.route('/check_db')
+def check_db():
+    """Check database connection and return status"""
+    try:
+        db_exists = check_and_create_db()
+
+        if not db_exists:
+            return jsonify({
+                'status': 'missing',
+                'message': 'Database does not exist or is missing required tables. Run update to initialize.'
+            })
+
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        # Check for existence of required tables in PostgreSQL
+        # Changed from sqlite_master to information_schema.tables
+        tables_query = """
+            SELECT table_name FROM information_schema.tables
+            WHERE table_schema = 'public' AND table_name IN ('adjusted_projections', 'injuries', 'player_teams')
+        """
+        cursor.execute(tables_query)
+        tables = cursor.fetchall()
+        table_names = [t[0] for t in tables]
+
+        required_tables = ['adjusted_projections', 'injuries', 'player_teams']
+        missing_tables = [table for table in required_tables if table not in table_names]
+
+        # Get game week info
+        game_week = determine_game_week()
+
+        if missing_tables:
+            return jsonify({
+                'status': 'missing',
+                'message': 'Game week info missing. Run update injuries and projections.'
+            })
+
+        # Get count of projections for current game week
+        cursor.execute(
+            "SELECT COUNT(*) FROM adjusted_projections WHERE game_week = %s",
+            (game_week,)
+        )
+        result = cursor.fetchone()
+        proj_count = result[0] if result is not None else 0
+
+        # ✅ Get the DB last modified time (Postgres version)
+        # In PostgreSQL, there is no built-in "last modified" timestamp for the whole database file.
+        # As an alternative, you can get the latest modification time from a key table (e.g., adjusted_projections)
+        try:
+            cursor.execute("SELECT MAX(updated_at) FROM adjusted_projections")
+            db_modified_row = cursor.fetchone()
+            db_modified = db_modified_row[0].strftime("%Y-%m-%d %H:%M") if db_modified_row and db_modified_row[0] else "Unknown"
+        except Exception:
+            db_modified = "Unknown"
+
+        conn.close() # Close connection here after all queries
+
+        return jsonify({
+            'status': 'connected',
+            'tables': table_names,
+            'game_week': game_week,
+            'projection_count': proj_count,
+            'projections_exist': proj_count > 0,
+            'needs_full_update': proj_count == 0,
+            'last_updated': db_modified
+        })
+    except Exception as e:
+        print(f"Error in check_db: {e}") # Log the error for debugging
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        })
+
+@app.route('/run_full_update', methods=['POST'])
+def full_update_route():
+    """Trigger a full update of the database from scratch"""
+    try:
+        success = run_full_update()
+        if success:
+            return jsonify({
+                'success': True,
+                'message': "Full database update completed successfully."
+            })
+        else:
+            return jsonify({
+                'error': "Failed to complete full database update. Check logs for details."
+            })
+    except Exception as e:
+        return jsonify({'error': f"Error during full update: {str(e)}"})
 
 @app.route('/projections')
 @app.route('/projections/<game_week_id>')
 def show_projections(game_week_id=None):
     create_teams_table()
-    conn = sqlite3.connect(DATABASE_FILE)
-    conn.row_factory = sqlite3.Row
+    conn = get_db_connection()
     c = conn.cursor()
-    
+
     # If no game week specified, use current one
     if not game_week_id:
         current_date = datetime.now().date()
         game_week_id = determine_game_week(current_date)
-    
+
     start_date, end_date = game_week_id.split('_to_')
-    
+
     # Get all games in the date range
-    games = c.execute("""
-        SELECT g.id, g.date, g.time, g.stadium_id, g.home_team_id, g.away_team_id, 
+    c.execute("""
+        SELECT g.id, g.local_date, g.stadium_id, g.home_team_id, g.away_team_id,
                ht.name AS home_team_name, at.name AS away_team_name,
                s.name AS stadium_name, g.wind_effect_label
-        FROM Games g
-        JOIN Teams ht ON g.home_team_id = ht.id
-        JOIN Teams at ON g.away_team_id = at.id
-        JOIN Stadiums s ON g.stadium_id = s.id
-        WHERE g.local_date BETWEEN ? AND ?
-        ORDER BY g.date, g.time
-    """, (start_date, end_date)).fetchall()
+        FROM games g
+        JOIN teams ht ON g.home_team_id = ht.id
+        JOIN teams at ON g.away_team_id = at.id
+        JOIN stadiums s ON g.stadium_id = s.id
+        WHERE g.local_date BETWEEN %s AND %s
+        ORDER BY g.local_date 
+    """, (start_date, end_date))
+    games = c.fetchall()
 
     # Get all projections for each game
     game_projections = {}
     for game in games:
-        game_id = game['id']
-        
+        game_id = game[0]
+        stadium_id = game[2]
+        home_team_id = game[3]
+        away_team_id = game[4]
+
         # Get home team projections
-        home_players = c.execute("""
+
+        c.execute("""
             SELECT ap.player_name, ap.sorare_score,
                 h.R_per_game, h.RBI_per_game, h.HR_per_game,
                 h.SB_per_game, h.CS_per_game, h.BB_per_game as h_BB_per_game, h.HBP_per_game as h_HBP_per_game,
-                `1B_per_game` as h_1B_per_game, `2B_per_game` as h_2B_per_game,
-                `3B_per_game` as h_3B_per_game, h.K_per_game as h_K_per_game,
+                h.singles_per_game as h_1B_per_game, h.doubles_per_game as h_2B_per_game, 
+                h.triples_per_game as h_3B_per_game, h.K_per_game as h_K_per_game, 
                 p.IP_per_game, p.K_per_game,  p.W_per_game, p.S_per_game, p.HLD_per_game,
                 p.H_per_game, p.ER_per_game, p.BB_per_game, p.HBP_per_game,
                 CASE WHEN p.IP_per_game > 0 THEN 'P' ELSE 'H' END as position
-            FROM AdjustedProjections ap
-            LEFT JOIN hitters_per_game h ON ap.mlbam_id = h.MLBAMID
-            LEFT JOIN pitchers_per_game p ON ap.mlbam_id = p.MLBAMID
-            WHERE ap.game_id = ? AND ap.team_id = ?
+            FROM adjusted_projections ap
+            LEFT JOIN hitters_per_game h ON ap.mlbam_id = h.mlbamid
+            LEFT JOIN pitchers_per_game p ON ap.mlbam_id = p.mlbamid
+            WHERE ap.game_id = %s AND ap.team_id = %s
             ORDER BY ap.sorare_score DESC
-        """, (game_id, game['home_team_id'])).fetchall()
-        
+        """, (game_id, home_team_id))
+        home_players = c.fetchall()
+
         # Get away team projections
-        away_players = c.execute("""
-            SELECT ap.player_name, ap.sorare_score, 
+        # Renamed columns with backticks to be compatible with PostgreSQL
+        c.execute("""
+            SELECT ap.player_name, ap.sorare_score,
                    h.R_per_game, h.RBI_per_game, h.HR_per_game,
                    h.SB_per_game, h.CS_per_game, h.BB_per_game as h_BB_per_game, h.HBP_per_game as h_HBP_per_game,
-                   `1B_per_game` as h_1B_per_game, `2B_per_game` as h_2B_per_game, 
-                                 `3B_per_game` as h_3B_per_game, h.K_per_game as h_K_per_game,
+                   h.singles_per_game as h_1B_per_game, h.doubles_per_game as h_2B_per_game, 
+                   h.triples_per_game as h_3B_per_game, h.K_per_game as h_K_per_game, -- Changed backticks to double quotes
                    p.IP_per_game, p.K_per_game, p.W_per_game, p.S_per_game, p.HLD_per_game,
                    p.H_per_game, p.ER_per_game, p.BB_per_game, p.HBP_per_game,
                    CASE WHEN p.IP_per_game > 0 THEN 'P' ELSE 'H' END as position
-            FROM AdjustedProjections ap
-            LEFT JOIN hitters_per_game h ON ap.mlbam_id = h.MLBAMID
-            LEFT JOIN pitchers_per_game p ON ap.mlbam_id = p.MLBAMID
-            WHERE ap.game_id = ? AND ap.team_id = ?
+            FROM adjusted_projections ap
+            LEFT JOIN hitters_per_game h ON ap.mlbam_id = h.mlbamid
+            LEFT JOIN pitchers_per_game p ON ap.mlbam_id = p.mlbamid
+            WHERE ap.game_id = %s AND ap.team_id = %s
             ORDER BY ap.sorare_score DESC
-        """, (game_id, game['away_team_id'])).fetchall()
-        
+        """, (game_id, away_team_id))
+        away_players = c.fetchall()
+
         # Get weather data
-        weather = c.execute("""
+        c.execute("""
             SELECT wind_dir, wind_speed, temp, rain
-            FROM WeatherForecasts
-            WHERE game_id = ?
-        """, (game_id,)).fetchone()
-        
+            FROM weather_forecasts
+            WHERE game_id = %s
+        """, (game_id,))
+        weather = c.fetchone()
         # Get park factors by stadium name
-        stadium_id = game['stadium_id']
-        park_factors = c.execute("""
-            SELECT factor_type, value 
-            FROM ParkFactors 
-            WHERE stadium_id = ?
-        """, (stadium_id,)).fetchall()
-        
+        c.execute("""
+            SELECT factor_type, value
+            FROM park_factors
+            WHERE stadium_id = %s
+        """, (stadium_id,))
+        park_factors = c.fetchall()
+
         # Convert park factors to dictionary
         park_factors_dict = {row[0]: row[1] / 100 for row in park_factors}
-        
+
         game_projections[game_id] = {
             'game_info': game,
             'home_players': home_players,
@@ -854,104 +956,82 @@ def show_projections(game_week_id=None):
             'weather': weather,
             'park_factors': park_factors_dict
         }
-    
+
     # Query for games missing probable pitchers
-    missing_pitchers = c.execute("""
-        SELECT g.id, g.date, g.time, 
+    c.execute("""
+        SELECT g.id, g.local_date,
                ht.name AS home_team_name, at.name AS away_team_name,
                g.home_probable_pitcher_id IS NULL AS home_probable_missing,
                g.away_probable_pitcher_id IS NULL AS away_probable_missing
-        FROM Games g
-        JOIN Teams ht ON g.home_team_id = ht.id
-        JOIN Teams at ON g.away_team_id = at.id
+        FROM games g
+        JOIN teams ht ON g.home_team_id = ht.id
+        JOIN teams at ON g.away_team_id = at.id
         WHERE (g.home_probable_pitcher_id IS NULL OR g.away_probable_pitcher_id IS NULL)
-          AND g.local_date BETWEEN ? AND ?
-        ORDER BY g.date, g.time
-    """, (start_date, end_date)).fetchall()
-    
+          AND g.local_date BETWEEN %s AND %s
+        ORDER BY g.local_date
+    """, (start_date, end_date))
+    missing_pitchers = c.fetchall()
+
     # Generate Baseball Savant links for missing probable pitchers
     missing_pitchers_links = [
         {
-            'game_id': game['id'],
-            'date': game['date'],
-            'time': game['time'],
-            'home_team': game['home_team_name'],
-            'away_team': game['away_team_name'],
-            'home_probable_missing': bool(game['home_probable_missing']),
-            'away_probable_missing': bool(game['away_probable_missing']),
-            'savant_link': f"https://baseballsavant.mlb.com/preview?game_pk={game['id']}"
+            'game_id': game[0],
+            'date': game[1],
+            'home_team': game[2],
+            'away_team': game[3],
+            'home_probable_missing': bool(game[4]),
+            'away_probable_missing': bool(game[5]),
+            'savant_link': f"https://baseballsavant.mlb.com/preview?game_pk={game[0]}"
         }
         for game in missing_pitchers
     ]
-      
+
     # Get available game weeks for navigation
-    game_weeks = c.execute("""
-        SELECT DISTINCT game_week 
-        FROM AdjustedProjections 
-        ORDER BY game_date
-    """).fetchall()
-    
+    # This query might not be ideal for ordering if game_week string contains year-month-day ranges
+    # It might be better to order by the start_date part of the game_week string if possible
+    c.execute("""
+    SELECT DISTINCT game_week
+    FROM adjusted_projections
+    ORDER BY game_week
+    """)
+    game_weeks_raw = c.fetchall()
     conn.close()
-    
+
+    # Convert list of tuples to a list of strings
+    game_weeks = [week[0] for week in game_weeks_raw]
+
     return render_template('projections.html',
-                          active_page='projections', 
-                          games=games,
-                          missing_pitchers_links=missing_pitchers_links,
-                          current_game_week=game_week_id,
-                          game_weeks=game_weeks,
-                          game_projections=game_projections)
+                            active_page='projections',
+                            games=games,
+                            missing_pitchers_links=missing_pitchers_links,
+                            current_game_week=game_week_id,
+                            game_weeks=game_weeks, # Now game_weeks is a list of strings
+                            game_projections=game_projections)
 
 
 @app.template_filter('score_to_width')
 def score_to_width(score):
     return min(float(score) * 2, 100)
 
-def get_team_name(conn, team_id):
-    """Get the team name from the team ID"""
-    try:
-        c = conn.cursor()
-        result = c.execute("SELECT name FROM Teams WHERE id = ?", (team_id,)).fetchone()
-        return result[0] if result else f"Team {team_id}"
-    except:
-        return f"Team {team_id}"
-
-def get_team_abbrev(conn, team_id):
-    """Get the team abbreviation from the team ID"""
-    try:
-        c = conn.cursor()
-        result = c.execute("SELECT abbreviation FROM Teams WHERE id = ?", (team_id,)).fetchone()
-        return result[0] if result else f"T{team_id}"
-    except:
-        return f"T{team_id}"
-
-def get_ballpark_name(conn, stadium_id):
-    """Get the ballpark name from the stadium ID"""
-    try:
-        c = conn.cursor()
-        result = c.execute("SELECT name FROM Stadiums WHERE id = ?", (stadium_id,)).fetchone()
-        return result[0] if result else f"Stadium {stadium_id}"
-    except:
-        return f"Stadium {stadium_id}"
-
 def get_game_weather_data(specified_date=None):
     """Get weather and HR odds data for all games on a given date (default today)"""
     # Initialize database connection
     conn = get_db_connection()
     c = conn.cursor()
-    
+
     # Get date in the correct format
     today = specified_date or date.today().strftime("%Y-%m-%d")
-    
+
     # Fetch schedule and update weather data
     get_schedule(conn, today, today)
     fetch_weather_and_store(conn, today, today)
-    
+
     # Query for games with weather data
     query = """
-    SELECT 
+    SELECT
         g.id as game_id,
-        g.date,
-        g.time,
+        g.date, 
+        g.time, 
         g.stadium_id,
         g.home_team_id,
         g.away_team_id,
@@ -963,25 +1043,25 @@ def get_game_weather_data(specified_date=None):
         w.wind_speed,
         w.temp,
         w.rain
-    FROM 
-        Games g
-    JOIN 
-        Stadiums s ON g.stadium_id = s.id
-    LEFT JOIN 
-        WeatherForecasts w ON g.id = w.game_id
-    WHERE 
-        g.local_date = ?
-    ORDER BY 
+    FROM
+        games g
+    JOIN
+        stadiums s ON g.stadium_id = s.id
+    LEFT JOIN
+        weather_forecasts w ON g.id = w.game_id
+    WHERE
+        g.local_date = %s
+    ORDER BY
         g.time
     """
-    
-    games = c.execute(query, (today,)).fetchall()
-    
+
+    c.execute(query, (today,))
+    games = c.fetchall()
     # If no games today, return empty data
     if not games:
         conn.close()
         return {"date": today, "games": [], "hr_rankings": []}
-    
+
     # Create a DataFrame for easier manipulation
     columns = [
         'game_id', 'date', 'time', 'stadium_id', 'home_team_id', 'away_team_id',
@@ -989,14 +1069,14 @@ def get_game_weather_data(specified_date=None):
         'wind_speed', 'temp', 'rain'
     ]
     games_df = pd.DataFrame(games, columns=columns)
-    
+
     # Process each game's weather and calculate HR factors
     game_data = []
     hr_odds_rankings = []
-    
+
     for _, game in games_df.iterrows():
         game_info = {}
-        
+
         # Game identifiers
         game_info['game_id'] = int(game['game_id'])
         game_info['stadium_name'] = game['stadium_name']
@@ -1004,20 +1084,25 @@ def get_game_weather_data(specified_date=None):
         game_info['away_team'] = get_team_name(conn, game['away_team_id'])
         game_info['home_abbrev'] = get_team_abbrev(conn, game['home_team_id'])
         game_info['away_abbrev'] = get_team_abbrev(conn, game['away_team_id'])
-        
+
         # Game time formatting
         game_time = game['time']
-        if game_time.endswith('Z'):
+        if isinstance(game_time, str) and game_time.endswith('Z'): # Ensure it's a string before splitting
             game_time = datetime.strptime(f"{game['date']}T{game_time}", "%Y-%m-%dT%H:%M:%SZ")
             game_time = game_time.replace(tzinfo=pytz.utc)
             local_time = game_time.astimezone(pytz.timezone('America/New_York'))
             game_info['time'] = local_time.strftime("%I:%M %p ET")
-        else:
-            game_info['time'] = datetime.strptime(game_time, "%H:%M:%S").strftime("%I:%M %p ET")
-        
+        elif isinstance(game_time, str): # Handle other string formats
+            try:
+                game_info['time'] = datetime.strptime(game_time, "%H:%M:%S").strftime("%I:%M %p ET")
+            except ValueError:
+                game_info['time'] = game_time # Fallback if parsing fails
+        else: # Handle if it's already a datetime object or other types
+            game_info['time'] = game_time
+
         # Calculate HR factors using the utility function
         hr_factors = calculate_hr_factors(
-            conn, 
+            conn,
             game['stadium_name'],
             bool(game['is_dome']),
             game['orientation'],
@@ -1025,14 +1110,14 @@ def get_game_weather_data(specified_date=None):
             game['wind_speed'],
             game['temp']
         )
-        
+
         # Add HR factor details to the game info
         game_info['hr_factor'] = hr_factors['hr_factor']
         game_info['park_hr_factor'] = hr_factors['park_hr_factor']
         game_info['hr_details'] = hr_factors['details']
         game_info['hr_classification'] = hr_factors['classification']
         game_info['hr_class_color'] = hr_factors['class_color']
-        
+
         # Summarize weather conditions
         game_info['weather_summary'] = get_weather_summary(
             bool(game['is_dome']),
@@ -1040,10 +1125,10 @@ def get_game_weather_data(specified_date=None):
             game['wind_speed'],
             game['wind_effect_label']
         )
-        
+
         # Add to game data list
         game_data.append(game_info)
-        
+
         # Add home and away teams to HR rankings
         hr_odds_rankings.append({
             'game_id': int(game['game_id']),
@@ -1056,7 +1141,7 @@ def get_game_weather_data(specified_date=None):
             'stadium': game_info['stadium_name'],
             'time': game_info['time']
         })
-        
+
         hr_odds_rankings.append({
             'game_id': int(game['game_id']),
             'team': game_info['away_team'],
@@ -1068,15 +1153,15 @@ def get_game_weather_data(specified_date=None):
             'stadium': game_info['stadium_name'],
             'time': game_info['time']
         })
-    
+
     # Sort HR odds rankings from best to worst
     hr_odds_rankings = sorted(hr_odds_rankings, key=lambda x: x['hr_factor'], reverse=True)
-    
+
     # Get top players with HR potential
     hr_players = get_top_hr_players(conn, today, hr_odds_rankings)
-    
+
     conn.close()
-    
+
     return {
         "date": today,
         "games": game_data,
@@ -1097,11 +1182,11 @@ def hr_odds(date_str=None):
         except ValueError:
             # If invalid date, fall back to today
             pass
-    
+
     # Get the HR odds data
     data = get_game_weather_data(specified_date)
-    
-    return render_template('hr_odds.html', 
+
+    return render_template('hr_odds.html',
                           active_page='hr-odds',
                           date=data['date'],
                           games=data['games'],
@@ -1111,9 +1196,9 @@ def hr_odds(date_str=None):
 if __name__ == '__main__':
     # Ensure the lineups directory exists
     os.makedirs('lineups', exist_ok=True)
-    create_teams_table()
+    create_teams_table() # Call this here to ensure Teams table is created on app start
     # Get port from environment variable (for deployment) or default to 5000
     port = int(os.environ.get('PORT', 5000))
-    
+
     # Run the app
     app.run(host='0.0.0.0', port=port, debug=True)

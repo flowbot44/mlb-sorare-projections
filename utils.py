@@ -2,12 +2,20 @@
 import unicodedata
 from datetime import datetime, timedelta, date
 import os
-import math
-import sqlite3
+import psycopg2
 from typing import Optional
-import pytz
+from sqlalchemy import create_engine
+from dotenv import load_dotenv
 
-DATABASE_FILE = os.environ.get('DATABASE_PATH', 'mlb_sorare.db')
+load_dotenv()
+
+PGUSER = os.environ["PGUSER"]
+PGPASSWORD = os.environ["PGPASSWORD"]
+PGHOST = os.environ["PGHOST"]
+PGPORT = os.environ["PGPORT"]
+PGDATABASE = os.environ["PGDATABASE"]
+
+DATABASE_URL = f"postgresql://{PGUSER}:{PGPASSWORD}@{PGHOST}:{PGPORT}/{PGDATABASE}"
 
 # Dictionary for specific name translations
 NAME_TRANSLATIONS = {
@@ -72,15 +80,18 @@ def get_platoon_start_side_by_mlbamid(mlbam_id: int) -> Optional[str]:
     Returns None if the player is not in the platoon_players table.
     """
     conn = get_db_connection()
-    conn.row_factory = sqlite3.Row
-    cursor = conn.execute(
-        'SELECT starts_vs FROM platoon_players WHERE mlbam_id = ?', 
-        (mlbam_id,)
-    )
-    row = cursor.fetchone()
-    conn.close()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            'SELECT starts_vs FROM platoon_players WHERE mlbam_id = %s', 
+            (mlbam_id,)
+        )
+        row = cursor.fetchone()
+    finally:
+        cursor.close()
+        conn.close()
 
-    return row['starts_vs'] if row else None
+    return row[0] if row else None
 
 
 def main():
@@ -89,14 +100,32 @@ def main():
 if __name__ == "__main__":
     main()
 
+if not DATABASE_URL:
+    # This check is important for both dev and production
+    raise ValueError("DATABASE_URL environment variable not set. Cannot connect to database.")
+
 def get_db_connection():
-    """Create a database connection and handle directory creation if needed"""
-    db_dir = os.path.dirname(DATABASE_FILE)
-    if db_dir and not os.path.exists(db_dir):
-        os.makedirs(db_dir, exist_ok=True)
-    
-    conn = sqlite3.connect(DATABASE_FILE)
-    return conn
+    """Establishes and returns a connection to the PostgreSQL database."""
+    try:
+        conn = psycopg2.connect(DATABASE_URL)
+        # Set row_factory for easy access to columns by name, similar to sqlite3.Row
+        # This requires a custom cursor factory
+        # from psycopg2.extras import RealDictCursor
+        # conn = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
+        # Or, if you want simpler tuple-based rows, just return conn.
+        # For consistency with how your existing code uses fetched rows,
+        # we'll stick to a basic cursor and access by index or ensure dict conversion.
+        # If your code relies heavily on row[column_name], consider RealDictCursor.
+        return conn
+    except Exception as e:
+        print(f"Error connecting to database: {e}")
+        raise # Re-raise to ensure connection errors are caught upstream
+
+def get_sqlalchemy_engine():
+    """Returns a SQLAlchemy engine for PostgreSQL."""
+    if not DATABASE_URL:
+        raise ValueError("DATABASE_URL environment variable not set. Cannot create SQLAlchemy engine.")
+    return create_engine(DATABASE_URL)
 
 # --- HR Factor Utility Functions ---
 
@@ -193,27 +222,33 @@ def calculate_hr_factors(conn, stadium_name, is_dome, orientation, wind_dir, win
     """
     # First, find the stadium_id from the stadium_name
     cursor = conn.cursor()
-    stadium_id_result = cursor.execute("SELECT id FROM Stadiums WHERE name = ?", (stadium_name,)).fetchone()
-    stadium_id = stadium_id_result[0] if stadium_id_result else None
-    
-    if not stadium_id:
-        print(f"Warning: Could not find stadium ID for stadium name: {stadium_name}")
-        # Use a default set of park factors
-        park_factors = {'HR': 1.0, 'R': 1.0, '1B': 1.0, '2B': 1.0, '3B': 1.0}
-    else:
-        # Get park factors by stadium ID
-        park_factors_data = cursor.execute("""
-            SELECT factor_type, value 
-            FROM ParkFactors 
-            WHERE stadium_id = ?
-        """, (stadium_id,)).fetchall()
+    stadium_id = None
+    try:
+        cursor.execute("SELECT id FROM stadiums WHERE name = %s", (stadium_name,))
+        stadium_id_result = cursor.fetchone()
+        stadium_id = stadium_id_result[0] if stadium_id_result else None
         
-        # Convert to dictionary with values divided by 100
-        park_factors = {row[0]: row[1] / 100 for row in park_factors_data}
-        
-        if not park_factors:
-            print(f"Warning: No park factors found for stadium ID: {stadium_id} ({stadium_name})")
+        if not stadium_id:
+            print(f"Warning: Could not find stadium ID for stadium name: {stadium_name}")
+            # Use a default set of park factors
             park_factors = {'HR': 1.0, 'R': 1.0, '1B': 1.0, '2B': 1.0, '3B': 1.0}
+        else:
+            # Get park factors by stadium ID
+            cursor.execute("""
+                SELECT factor_type, value 
+                FROM park_factors d
+                WHERE stadium_id = %s
+            """, (stadium_id,))
+            park_factors_data = cursor.fetchall()
+            
+            # Convert to dictionary with values divided by 100
+            park_factors = {row[0]: row[1] / 100 for row in park_factors_data}
+            
+            if not park_factors:
+                print(f"Warning: No park factors found for stadium ID: {stadium_id} ({stadium_name})")
+                park_factors = {'HR': 1.0, 'R': 1.0, '1B': 1.0, '2B': 1.0, '3B': 1.0}
+    finally:
+        cursor.close()
     
     # Get the HR park factor (default to 1.0 if not found)
     hr_factor = 1.0
@@ -326,65 +361,70 @@ def get_top_hr_players(conn, game_date, team_rankings, limit=25):
     player_data = []
     c = conn.cursor()
     
-    # Get mapping from team name to mlb team ID
-    team_id_map = {}
-    teams = c.execute("SELECT id, name FROM Teams").fetchall()
-    for team_id, team_name in teams:
-        team_id_map[team_name] = team_id
-    
-    # Query player projections - focusing on home run hitters
-    for team_rank in team_rankings:
-        team_name = team_rank['team']
-        if team_name not in team_id_map:
-            continue
-            
-        team_id = team_id_map[team_name]
-        hr_factor = team_rank['hr_factor']
+    try:
+        # Get mapping from team name to mlb team ID
+        team_id_map = {}
+        c.execute("SELECT id, name FROM Teams")
+        teams = c.fetchall()
+        for team_id, team_name in teams:
+            team_id_map[team_name] = team_id
         
-        # Get players on this team with their projected stats
-        query = """
-        SELECT 
-            h.Name, 
-            p.mlbam_id,
-            h.HR_per_game
-        FROM 
-            hitters_per_game h
-        JOIN
-            PlayerTeams p ON h.MLBAMID = p.mlbam_id
-        WHERE 
-            p.team_id = ? AND
-            h.HR_per_game > 0
-        ORDER BY
-            h.HR_per_game DESC
-        """
-        
-        player_results = c.execute(query, (team_id,)).fetchall()
-        
-        for player in player_results:
-            name, mlbam_id, hr_per_game = player
+        # Query player projections - focusing on home run hitters
+        for team_rank in team_rankings:
+            team_name = team_rank['team']
+            if team_name not in team_id_map:
+                continue
+                
+            team_id = team_id_map[team_name]
+            hr_factor = team_rank['hr_factor']
             
-            # Apply the game's HR factor to the player's HR rate
-            adjusted_hr_per_game = hr_per_game * hr_factor
+            # Get players on this team with their projected stats
+            query = """
+            SELECT 
+                h.Name, 
+                p.mlbam_id,
+                h.HR_per_game
+            FROM 
+                hitters_per_game h
+            JOIN
+                player_teams p ON h.mlbamid = p.mlbam_id
+            WHERE 
+                p.team_id = %s AND
+                h.HR_per_game > 0
+            ORDER BY
+                h.HR_per_game DESC
+            """
             
-            # Calculate HR probability for this game
-            hr_odds = 1 - (1 - adjusted_hr_per_game) ** 1  # Probability of at least 1 HR
+            c.execute(query, (team_id,))
+            player_results = c.fetchall()
             
-            # Add player to the list
-            player_data.append({
-                'name': name,
-                'mlbam_id': mlbam_id,
-                'team': team_name,
-                'team_abbrev': team_rank['abbrev'],
-                'opponent': team_rank['opponent'],
-                'is_home': team_rank['is_home'],
-                'game_id': team_rank['game_id'],
-                'stadium': team_rank['stadium'],
-                'game_time': team_rank['time'],
-                'hr_per_game': hr_per_game,
-                'adjusted_hr_per_game': adjusted_hr_per_game,
-                'hr_odds_pct': hr_odds * 100,  # Convert to percentage
-                'game_hr_factor': hr_factor
-            })
+            for player in player_results:
+                name, mlbam_id, hr_per_game = player
+                
+                # Apply the game's HR factor to the player's HR rate
+                adjusted_hr_per_game = hr_per_game * hr_factor
+                
+                # Calculate HR probability for this game
+                hr_odds = 1 - (1 - adjusted_hr_per_game) ** 1  # Probability of at least 1 HR
+                
+                # Add player to the list
+                player_data.append({
+                    'name': name,
+                    'mlbam_id': mlbam_id,
+                    'team': team_name,
+                    'team_abbrev': team_rank['abbrev'],
+                    'opponent': team_rank['opponent'],
+                    'is_home': team_rank['is_home'],
+                    'game_id': team_rank['game_id'],
+                    'stadium': team_rank['stadium'],
+                    'game_time': team_rank['time'],
+                    'hr_per_game': hr_per_game,
+                    'adjusted_hr_per_game': adjusted_hr_per_game,
+                    'hr_odds_pct': hr_odds * 100,  # Convert to percentage
+                    'game_hr_factor': hr_factor
+                })
+    finally:
+        c.close()
     
     # Sort by adjusted HR probability
     sorted_players = sorted(player_data, key=lambda x: x['hr_odds_pct'], reverse=True)
