@@ -14,7 +14,14 @@ from utils import (
     get_db_connection
 )
 import math
-
+import logging
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[logging.StreamHandler()]
+)
+logger = logging.getLogger("grok_ballpark_factor")
 
 SCORING_MATRIX = {
     'hitting': {'R': 3, 'RBI': 3, '1B': 2, '2B': 5, '3B': 8, 'HR': 10, 'BB': 2, 'K': -1, 'SB': 5, 'CS': -1, 'HBP': 2},
@@ -45,7 +52,6 @@ def init_db():
                  (id SERIAL PRIMARY KEY, game_id INTEGER, 
                   wind_dir REAL, wind_speed REAL, temp REAL, rain REAL, timestamp TEXT)''')
     
-    c.execute('DROP TABLE IF EXISTS adjusted_projections CASCADE')
     c.execute('''CREATE TABLE IF NOT EXISTS adjusted_projections 
                 (id SERIAL PRIMARY KEY, player_name TEXT, mlbam_id TEXT,
                  game_id INTEGER, game_date TEXT, sorare_score REAL, team_id INTEGER, game_week TEXT)''')
@@ -167,11 +173,11 @@ def populate_player_teams(conn, start_date, end_date, update_rosters=False):
         c.execute("SELECT COUNT(*) FROM player_teams")
         existing_count = c.fetchone()[0]
         if existing_count > 0:
-            print("Using cached roster data.")
+            logger.info("Using cached roster data.")
             return
-        print("No cached roster data found; fetching rosters...")
+        logger.info("No cached roster data found; fetching rosters...")
     
-    print("Updating roster data...")
+    logger.info("Updating roster data...")
     c.execute("DELETE FROM player_teams")
     
     teams = set()
@@ -226,7 +232,7 @@ def populate_player_teams(conn, start_date, end_date, update_rosters=False):
                             VALUES (%s, %s, %s, %s, %s, %s)
                         """, (player_id, player_id, player_name, bats, throws, current_date))
         except Exception as e:
-            print(f"Error fetching roster for team {team_id}: {e}")
+            logger.error(f"Error fetching roster for team {team_id}: {e}")
     
     conn.commit()
     add_projected_starting_pitchers(conn, start_date, end_date)
@@ -239,7 +245,7 @@ def get_weather_nws(lat, lon, forecast_time):
     """
     try:
         if not (-90 <= lat <= 90 and -180 <= lon <= 180):
-            print(f"Invalid coordinates: lat={lat}, lon={lon}")
+            logger.info(f"Invalid coordinates: lat={lat}, lon={lon}")
             return None
         
         # Ensure the forecast_time has a timezone (should be UTC)
@@ -256,7 +262,7 @@ def get_weather_nws(lat, lon, forecast_time):
             points_data = points_response.json()
 
             if 'properties' not in points_data or 'forecastHourly' not in points_data['properties']:
-                print(f"Invalid points data structure: {points_data}")
+                logger.info(f"Invalid points data structure: {points_data}")
                 return None
 
             forecast_hourly_url = points_data['properties']['forecastHourly']
@@ -267,8 +273,8 @@ def get_weather_nws(lat, lon, forecast_time):
             if e.response.status_code == 503 and "ForecastMissingData" in e.response.text:
                 # Handle missing forecast data specifically
                 error_details = e.response.json() if e.response.text else {"detail": "Unknown error"}
-                print(f"NWS API missing forecast data: {error_details.get('detail', 'No details provided')}")
-                print(f"This is normal for dates far in the future or certain regions.")
+                logger.error(f"NWS API missing forecast data: {error_details.get('detail', 'No details provided')}")
+                logger.error(f"This is normal for dates far in the future or certain regions.")
                 return {
                     'temp': 70,  # Default temperature
                     'wind_speed': 5,  # Light wind
@@ -278,12 +284,12 @@ def get_weather_nws(lat, lon, forecast_time):
             raise  # Re-raise for other HTTP errors
 
         if 'properties' not in forecast_data or 'periods' not in forecast_data['properties']:
-            print(f"Invalid forecast data structure: {forecast_data}")
+            logger.info(f"Invalid forecast data structure: {forecast_data}")
             return None
 
         periods = forecast_data['properties']['periods']
         if not periods:
-            print("No forecast periods available.")
+            logger.info("No forecast periods available.")
             return None
 
         # Collect all forecasts within the game time window
@@ -315,11 +321,11 @@ def get_weather_nws(lat, lon, forecast_time):
                     }
                     relevant_forecasts.append(forecast)
             except (KeyError, ValueError) as e:
-                print(f"Error parsing period times: {e} in period: {period}")
+                logger.error(f"Error parsing period times: {e} in period: {period}")
                 continue
 
         if not relevant_forecasts:
-            print(f"No forecast periods found overlapping with game time {forecast_time} to {game_end_time}")
+            logger.info(f"No forecast periods found overlapping with game time {forecast_time} to {game_end_time}")
             return None
             
         # Calculate weighted averages
@@ -349,12 +355,12 @@ def get_weather_nws(lat, lon, forecast_time):
         return weather
         
     except requests.exceptions.RequestException as e:
-        print(f"NWS API Request Error: {e}")
+        logger.error(f"NWS API Request Error: {e}")
         if hasattr(e, 'response') and e.response is not None:
-            print(f"Response content: {e.response.text[:500]}")  # Print first 500 chars of response
+            logger.error(f"Response content: {e.response.text[:500]}")  # Print first 500 chars of response
         return None
     except Exception as e:
-        print(f"Unexpected error in get_weather_nws: {e}")
+        logger.error(f"Unexpected error in get_weather_nws: {e}")
         return None
 
 def fetch_weather_and_store(conn, start_date, end_date):
@@ -369,7 +375,7 @@ def fetch_weather_and_store(conn, start_date, end_date):
         # The timestamp column doesn't exist, so add it
         c.execute("ALTER TABLE weather_forecasts ADD COLUMN timestamp TEXT")
         conn.commit()
-        print("Added timestamp column to weather_forecasts table")
+        logger.info("Added timestamp column to weather_forecasts table")
     
     # Use local_date for filtering instead of date
     c.execute("""
@@ -378,7 +384,7 @@ def fetch_weather_and_store(conn, start_date, end_date):
     """, (start_date, end_date))
     games = c.fetchall()
     
-    print(f"Found {len(games)} games for weather processing between {start_date} and {end_date}")
+    logger.info(f"Found {len(games)} games for weather processing between {start_date} and {end_date}")
     
     # Always use pytz.utc for current_time to ensure proper timezone handling
     current_time = datetime.now(pytz.utc)
@@ -413,10 +419,10 @@ def fetch_weather_and_store(conn, start_date, end_date):
                         needs_update = False
                         continue  # Skip this game, forecast is recent enough
                     else:
-                        print(f"Weather forecast for game {game_id} is {time_diff.total_seconds() / 3600:.1f} hours old, refreshing...")
+                        logger.info(f"Weather forecast for game {game_id} is {time_diff.total_seconds() / 3600:.1f} hours old, refreshing...")
                 except (ValueError, TypeError):
                     # If timestamp is invalid, update the forecast
-                    print(f"Invalid timestamp for game {game_id}, refreshing forecast...")
+                    logger.error(f"Invalid timestamp for game {game_id}, refreshing forecast...")
         
         c.execute("SELECT lat, lon, is_dome, orientation FROM stadiums WHERE id = %s", (stadium_id,))
         stadium = c.fetchone()
@@ -425,7 +431,7 @@ def fetch_weather_and_store(conn, start_date, end_date):
             
         lat, lon, is_dome, orientation = stadium
         if lat is None or lon is None:
-            print(f"Skipping game https://baseballsavant.mlb.com/preview?game_pk={game_id} due to missing stadium {stadium_id} coordinates.")
+            logger.info(f"Skipping game https://baseballsavant.mlb.com/preview?game_pk={game_id} due to missing stadium {stadium_id} coordinates.")
             continue
 
         # Parse game time to UTC
@@ -440,20 +446,20 @@ def fetch_weather_and_store(conn, start_date, end_date):
                 local_time = datetime.strptime(f"{date}T{time}", "%Y-%m-%dT%H:%M:%S")
                 local_time = local_tz.localize(local_time, is_dst=None)  # Handle DST properly
                 utc_time = local_time.astimezone(pytz.utc)
-                print(f"Warning: Game {game_id} has no timezone indicator. Assuming Eastern Time.")
+                logger.info(f"Warning: Game {game_id} has no timezone indicator. Assuming Eastern Time.")
         except ValueError as e:
-            print(f"Error parsing time for game {game_id}: {e}")
+            logger.error(f"Error parsing time for game {game_id}: {e}")
             continue
 
         # Skip games that have already started or occurred in the past
         if utc_time <= current_time:
             skipped_past_games += 1
-            print(f"⚠️ Skipping forecast for game {game_id} that has already started or occurred ({utc_time.strftime('%Y-%m-%d %H:%M:%S')})")
+            logger.info(f"⚠️ Skipping forecast for game {game_id} that has already started or occurred ({utc_time.strftime('%Y-%m-%d %H:%M:%S')})")
             continue
             
         # Skip games too far in the future (> 7 days)
         if utc_time > current_time + timedelta(days=7):
-            print(f"⚠️ Skipping forecast too far in the future: {utc_time.strftime('%Y-%m-%d %H:%M:%S')} game id {game_id}")
+            logger.info(f"⚠️ Skipping forecast too far in the future: {utc_time.strftime('%Y-%m-%d %H:%M:%S')} game id {game_id}")
             continue
 
         # Get and store the weather forecast
@@ -485,13 +491,14 @@ def fetch_weather_and_store(conn, start_date, end_date):
                 UPDATE games SET wind_effect_label = %s WHERE id = %s
             """, (wind_effect_label, game_id))
         else:
-            print(f"Skipping game {game_id} due to API error.")
+            logger.info(f"Skipping game {game_id} due to API error.")
 
     if skipped_past_games > 0:
-        print(f"Skipped weather lookup for {skipped_past_games} past games")
+        logger.info(f"Skipped weather lookup for {skipped_past_games} past games")
     if updated_forecasts > 0:
-        print(f"Updated {updated_forecasts} weather forecasts that were older than {cache_timeout_hours} hour(s)")
+        logger.info(f"Updated {updated_forecasts} weather forecasts that were older than {cache_timeout_hours} hour(s)")
     conn.commit()
+    logger.info("Weather data processing complete.")
 
 # --- Adjustment Functions ---
 def adjust_stats(stats, park_factors, is_dome, orientation, wind_dir, wind_speed, temp, is_pitcher=False):
@@ -545,7 +552,7 @@ def adjust_score_for_injury(base_score, injury_status, return_estimate, game_dat
             if isinstance(game_date, datetime):
                 game_date = game_date.date()
         except ValueError:
-            print(f"Warning: Invalid return date format '{return_estimate}', treating as None")
+            logger.error(f"Warning: Invalid return date format '{return_estimate}', treating as None")
             return_estimate_date = None
 
     if injury_status in INJURY_STATUSES_OUT and (not return_estimate_date or game_date <= return_estimate_date):
@@ -563,9 +570,8 @@ def process_hitter(conn, game_data, hitter_data, injuries, game_week_id):
 
     player_name = normalize_name(hitter_data.get("name"))
     mlbam_id = hitter_data.get("mlbamid")
-    
     if not player_name:
-        print(f"Warning: Null Name for hitter in game {game_id}")
+        logger.info(f"Warning: Null Name for hitter in game {game_id}")
         return
 
     player_team_id = hitter_data.get("teamid")
@@ -578,7 +584,7 @@ def process_hitter(conn, game_data, hitter_data, injuries, game_week_id):
             player_team_id = team_result[0]
     
     if not player_team_id:
-        #print(f"â� ï¸� Skipping {player_name} â�� no team assigned.")
+        #logger.info(f"â� ï¸� Skipping {player_name} â�� no team assigned.")
         return
     if player_team_id not in (home_team_id, away_team_id):
         return
@@ -605,7 +611,7 @@ def process_hitter(conn, game_data, hitter_data, injuries, game_week_id):
     park_factors = {row[0]: row[1] / 100 for row in park_factor_rows}
     
     if not park_factors:
-        print(f"park not found {stadium_id}")
+        logger.info(f"park not found {stadium_id}")
         park_factors = {'R': 1.0, 'RBI': 1.0, '1B': 1.0, '2B': 1.0, '3B': 1.0, 'HR': 1.0, 'BB': 1.0, 'K': 1.0, 'SB': 1.0, 'CS': 1.0, 'HBP': 1.0}
 
     # --- NEW: Determine opposing pitcher and their handedness ---
@@ -684,7 +690,7 @@ def process_hitter(conn, game_data, hitter_data, injuries, game_week_id):
     if platoon_matchup and pitcher_handedness and pitcher_handedness != platoon_matchup:
         platoon_adjustment = 0.25  # Reduce stats by 25% for same-handed matchups
         base_stats = {stat: value * platoon_adjustment for stat, value in base_stats.items()}
-        print(f"Applying platoon adjustment for {player_name}: {platoon_adjustment}x due to starter throws {pitcher_handedness} and batter starts vs {platoon_matchup} game {game_id}")
+        logger.info(f"Applying platoon adjustment for {player_name}: {platoon_adjustment}x due to starter throws {pitcher_handedness} and batter starts vs {platoon_matchup} game {game_id}")
 
     # Apply platoon adjustment to base stats 
     adjusted_stats = adjust_stats(base_stats, park_factors, is_dome, orientation, wind_dir, wind_speed, temp)
@@ -702,9 +708,12 @@ def process_hitter(conn, game_data, hitter_data, injuries, game_week_id):
             (mlbam_id = %s AND game_id = %s)
     """, (player_name, game_id, player_team_id, mlbam_id, game_id))
     existing = c.fetchone()
-
+   # logging.info(f"existing {existing} player {player_name} with score {final_score}")
+            
     try:
         if existing:
+           # logging.info(f"update Adding new projection for {player_name} with score {final_score}")
+            
             c.execute("""
                 UPDATE adjusted_projections 
                 SET sorare_score = %s, game_date = %s
@@ -712,13 +721,14 @@ def process_hitter(conn, game_data, hitter_data, injuries, game_week_id):
                     (mlbam_id = %s AND game_id = %s)
             """, (final_score, local_date, player_name, game_id, player_team_id, mlbam_id, game_id))
         else:
+           # logging.info(f"insert Adding new projection for {player_name} with score {final_score}")
             c.execute("""
                 INSERT INTO adjusted_projections 
                 (player_name, mlbam_id, game_id, game_date, sorare_score, game_week, team_id) 
                 VALUES (%s, %s, %s, %s, %s, %s, %s)
             """, (player_name, mlbam_id, game_id, local_date, final_score, game_week_id, player_team_id))
     except Exception as e:
-            print(f"‼️ INSERT FAILED for {player_name} — {e}")
+            logger.error(f"INSERT FAILED for {player_name} — {e}")
 
 def process_pitcher(conn, game_data, pitcher_data, injuries, game_week_id, is_starter=False):
     # Unpack game_data with local_date
@@ -731,7 +741,7 @@ def process_pitcher(conn, game_data, pitcher_data, injuries, game_week_id, is_st
     mlbam_id = pitcher_data.get("mlbamid")
     
     if not player_name:
-        print(f"Warning: Null Name for pitcher in game {game_id}")
+        logger.info(f"Warning: Null Name for pitcher in game {game_id}")
         return
 
     player_team_id = pitcher_data.get("teamid")
@@ -744,7 +754,7 @@ def process_pitcher(conn, game_data, pitcher_data, injuries, game_week_id, is_st
             player_team_id = team_result[0]
             
     if not player_team_id:
-        print(f"⚠️ Skipping {player_name} — no team assigned.")
+        logger.info(f"⚠️ Skipping {player_name} — no team assigned.")
         return
     if player_team_id not in (home_team_id, away_team_id):
         return
@@ -793,7 +803,7 @@ def process_pitcher(conn, game_data, pitcher_data, injuries, game_week_id, is_st
     stadium_data = c.fetchone()
     
     if not stadium_data:
-        print(f"No stadium data for game {game_id} with stadium_id {stadium_id}")
+        logger.info(f"No stadium data for game {game_id} with stadium_id {stadium_id}")
         is_dome, orientation, wind_dir, wind_speed, temp = (0, 0, 0, 0, 70)
     else:
         is_dome, orientation, wind_dir, wind_speed, temp = stadium_data
@@ -802,7 +812,7 @@ def process_pitcher(conn, game_data, pitcher_data, injuries, game_week_id, is_st
     park_factor_rows = c.fetchall()
     park_factors = {row[0]: row[1] / 100 for row in park_factor_rows}
     if not park_factors:
-        print(f"No park factors for stadium_id {stadium_id}, using default 1.0")
+        logger.info(f"No park factors for stadium_id {stadium_id}, using default 1.0")
         park_factors = {'IP': 1.0, 'SO': 1.0, 'H': 1.0, 'ER': 1.0, 'BB': 1.0, 'HBP': 1.0, 'W': 1.0, 'SV': 1.0}
     
     base_stats = {
@@ -856,7 +866,7 @@ def process_pitcher(conn, game_data, pitcher_data, injuries, game_week_id, is_st
                 VALUES (%s, %s, %s, %s, %s, %s, %s)
             """, (player_name, mlbam_id, game_id, local_date, final_score, game_week_id, player_team_id))
     except Exception as e:
-        print(f"‼️ INSERT FAILED for {player_name} — {e}")
+        logger.exception(f"S INSERT FAILED for {player_name} — {e}")
 
 def add_projected_starting_pitchers(conn, start_date, end_date):
     """
@@ -864,7 +874,7 @@ def add_projected_starting_pitchers(conn, start_date, end_date):
     This will allow the system to use their existing projections from pitchers_per_game.
     Also captures their handedness information.
     """
-    print("Adding projected starting pitchers to player_teams...")
+    logger.info("Adding projected starting pitchers to player_teams...")
     c = conn.cursor()
     
     # Get games in the date range
@@ -936,12 +946,12 @@ def add_projected_starting_pitchers(conn, start_date, end_date):
                                     """, (str(pitcher_id), str(pitcher_id), player_name, bats, throws, current_date))
                                 
                                 pitcher_count += 1
-                                print(f"Added projected starter: {player_name} (ID: {pitcher_id}) to team {team_id} - Throws: {throws}, Bats: {bats}")
+                                logger.info(f"Added projected starter: {player_name} (ID: {pitcher_id}) to team {team_id} - Throws: {throws}, Bats: {bats}")
                     except Exception as e:
-                        print(f"Error fetching pitcher {pitcher_id} data: {e}")
+                        logger.error(f"Error fetching pitcher {pitcher_id} data: {e}")
     
     conn.commit()
-    print(f"Added {pitcher_count} projected starting pitchers to player_teams")
+    logger.info(f"Added {pitcher_count} projected starting pitchers to player_teams")
 
 # --- Updates to the main functions ---
 def calculate_adjustments(conn, start_date, end_date, game_week_id):
@@ -951,8 +961,6 @@ def calculate_adjustments(conn, start_date, end_date, game_week_id):
         end_date = end_date.strftime('%Y-%m-%d')
     
     c = conn.cursor()
-    c.execute("DELETE FROM adjusted_projections WHERE game_week = %s", (game_week_id,))
-    
     # Create injury lookup as before
     c.execute("SELECT player_name, status, return_estimate FROM injuries")
     injury_rows = c.fetchall()
@@ -981,7 +989,7 @@ def calculate_adjustments(conn, start_date, end_date, game_week_id):
     """, (start_date, end_date))
     games = c.fetchall()
     
-    print(f"Found {len(games)} games for projection processing between {start_date} and {end_date}")
+    logger.info(f"Found {len(games)} games for projection processing between {start_date} and {end_date}")
     
     # First, lookup the names of the probable pitchers
     for i, game in enumerate(games):
@@ -1042,7 +1050,6 @@ def calculate_adjustments(conn, start_date, end_date, game_week_id):
         # Combine home and away hitters
         hitters = home_hitters + away_hitters
         hitter_columns = [col[0] for col in c.description]
-        
         for hitter in hitters:
             hitter_dict = {hitter_columns[i]: hitter[i] for i in range(len(hitter_columns))}
             process_hitter(conn, game_data, hitter_dict, injuries, game_week_id)
@@ -1068,7 +1075,6 @@ def calculate_adjustments(conn, start_date, end_date, game_week_id):
         # Combine home and away pitchers
         pitchers = home_pitchers + away_pitchers
         pitcher_columns = [col[0] for col in c.description]
-
         for pitcher in pitchers:
             pitcher_dict = {pitcher_columns[i]: pitcher[i] for i in range(len(pitcher_columns))}
             player_name = normalize_name(pitcher_dict.get("name", ""))
@@ -1087,30 +1093,33 @@ def calculate_adjustments(conn, start_date, end_date, game_week_id):
             process_pitcher(conn, game_data, pitcher_dict, injuries, game_week_id, is_starter=is_starter)
     
     conn.commit()
-    print("✅ Committed adjusted_projections to database.")
+    logger.info("✅ Committed adjusted_projections to database.")
 
 # --- Main Function ---
 def main(update_rosters=False, specified_date=None):
-    # If no date is specified, use the current date in local timezone
-    if specified_date is None:
-        # Get current date in local timezone rather than UTC to ensure
-        # correct determination of game week
-        current_date = datetime.now().date()
-    else:
-        current_date = specified_date
+    try:
+        # If no date is specified, use the current date in local timezone
+        if specified_date is None:
+            # Get current date in local timezone rather than UTC to ensure
+            # correct determination of game week
+            current_date = datetime.now().date()
+        else:
+            current_date = specified_date
+            
+        game_week_id = determine_game_week(current_date)  # Use the utils function
+        start_date, end_date = game_week_id.split('_to_')  # Split the string for use
+        logger.info(f"Processing game week: {start_date} to {end_date}")
+        conn = init_db()
         
-    game_week_id = determine_game_week(current_date)  # Use the utils function
-    start_date, end_date = game_week_id.split('_to_')  # Split the string for use
-    print(f"Processing game week: {start_date} to {end_date}")
-    conn = init_db()
-    
-    game_week_id = get_schedule(conn, start_date, end_date)  # Still returns the same string
-    fetch_weather_and_store(conn, start_date, end_date)
-    populate_player_teams(conn, start_date, end_date, update_rosters=update_rosters)
-    calculate_adjustments(conn, start_date, end_date, game_week_id)
-    conn.close()
-    print(f"Projections adjusted for game week: {start_date} to {end_date}")
-    print(f"Game week ID: {game_week_id}")
+        game_week_id = get_schedule(conn, start_date, end_date)  # Still returns the same string
+        fetch_weather_and_store(conn, start_date, end_date)
+        populate_player_teams(conn, start_date, end_date, update_rosters=update_rosters)
+        calculate_adjustments(conn, start_date, end_date, game_week_id)
+        conn.close()
+        logger.info(f"Projections adjusted for game week: {start_date} to {end_date}")
+        logger.info(f"Game week ID: {game_week_id}")
+    except Exception as e:
+        logger.error(f"Error in populate projections function: {e}")
 
 if __name__ == "__main__":
     main()

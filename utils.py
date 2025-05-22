@@ -6,7 +6,14 @@ import psycopg2
 from typing import Optional
 from sqlalchemy import create_engine
 from dotenv import load_dotenv
-
+import logging
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[logging.StreamHandler()]
+)
+logger = logging.getLogger("utils")
 load_dotenv()
 
 PGUSER = os.environ["PGUSER"]
@@ -16,6 +23,14 @@ PGPORT = os.environ["PGPORT"]
 PGDATABASE = os.environ["PGDATABASE"]
 
 DATABASE_URL = f"postgresql://{PGUSER}:{PGPASSWORD}@{PGHOST}:{PGPORT}/{PGDATABASE}"
+
+logging.info(f"Connecting to database at {DATABASE_URL}")
+
+# Absolute path to the folder where utils.py is located
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# Data directory relative to that
+DATA_DIR = os.path.join(BASE_DIR, "data")
 
 # Dictionary for specific name translations
 NAME_TRANSLATIONS = {

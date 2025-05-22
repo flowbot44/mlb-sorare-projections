@@ -62,8 +62,13 @@ DEFAULT_LINEUP_ORDER = [
 
 
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[logging.StreamHandler()]
+)
+logger = logging.getLogger("flask_app")
 
 def check_and_create_db():
     """Check if database exists and create it if not"""
@@ -111,41 +116,44 @@ def run_full_update():
         create_teams_table() # Ensure Teams table is created first
 
         # Step 1: Run fangraph_fetcher to download CSVs
-        print("Running fangraph_fetcher.py...")
+        logger.info("Running fangraph_fetcher.py...")
         subprocess.run(["python3", os.path.join(script_dir, "fangraph_fetcher.py")], check=True)
 
         # Optional delay if needed
         time.sleep(5)
 
         # Step 2: Run park_factor_fetcher to download ballpark data
-        print("Running park_factor_fetcher.py...")
+        logger.info("Running park_factor_fetcher.py...")
         subprocess.run(["python3", os.path.join(script_dir, "park_factor_fetcher.py")], check=True)
 
         # Optional delay
         time.sleep(2)
 
         # Step 3: Run depth_projection to process CSVs into PostgreSQL DB
-        print("Running depth_projection.py...")
+        logger.info("Running depth_projection.py...")
         subprocess.run(["python3", os.path.join(script_dir, "depth_projection.py")], check=True)
 
         # Step 4: Run update_stadiums to ensure stadium data is current
-        print("Running update_stadiums.py...")
+        logger.info("Running update_stadiums.py...")
         subprocess.run(["python3", os.path.join(script_dir, "update_stadiums.py")], check=True)
 
         # Step 5: Update injury data
+        logger.info("Running fetch_injury_data...")
         injury_data = fetch_injury_data()
         if injury_data:
+            logger.info("Updating database with injury data...")
             update_database(injury_data)
 
+        logger.info("Running update_projections...")
         # Step 6: Update projections using existing function
         update_projections()
 
         return True
     except subprocess.CalledProcessError as e:
-        print(f"Subprocess failed: {e.cmd} exited with code {e.returncode}. Output: {e.output.decode()}")
+        logger.error(f"Subprocess failed: {e.cmd} exited with code {e.returncode}. Output: {e.output.decode()}")
         return False
     except Exception as e:
-        print(f"Error during full update: {str(e)}")
+        logger.error(f"Error during full update: {str(e)}")
         return False
 
 def add_team_names_to_games(high_rain_games):

@@ -1,12 +1,11 @@
 import pandas as pd
 import os
-from utils import get_sqlalchemy_engine, normalize_name
+from utils import get_sqlalchemy_engine, normalize_name, DATA_DIR
 import logging
 from sqlalchemy import text
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 
 # Construct file paths
 hitter_file = os.path.join(DATA_DIR, 'batter.csv')
@@ -56,7 +55,7 @@ def prorate_hitter(row, name_col, col_map=None):
     actual_games = safe_get_col(row, 'g')
     
     result = {
-        name_col: row[name_col],
+        'name': row[name_col],
         'g': actual_games,
         'mlbamid': str(0)  # Default as string
     }
@@ -89,7 +88,7 @@ def prorate_pitcher(row, name_col, col_map=None):
     games = safe_get_col(row, 'g')
     
     result = {
-        name_col: row[name_col],
+        'name': row[name_col],
         'g': games,
         'mlbamid': str(0)  # Default as string
     }
@@ -122,9 +121,11 @@ def process_dataset(df, name_col, table_prefix, conn, col_map=None, is_pitcher=F
     if col_map:
         df = df.rename(columns={v: k for k, v in col_map.items()})  # Reverse the mapping (e.g., '1b' -> 'singles')
     
+    
+        
     # Convert mlbamid to string
-    if 'mlbamid' in df.columns:
-        df['mlbamid'] = df['mlbamid'].astype(str)
+    if 'xmlbamid' in df.columns:
+        df['mlbamid'] = df['xmlbamid'].astype(str)
     
     try:
         with conn.begin():  # Transaction is managed here
