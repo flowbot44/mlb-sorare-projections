@@ -140,9 +140,12 @@ def process_dataset(df, name_col, table_prefix, conn, col_map=None, is_pitcher=F
         logger.error(f"Error dropping tables: {e}")
         raise
     
-    logger.info(f"Creating {table_prefix}_full_season table...")
-    df.to_sql(f'{table_prefix}_full_season', conn.engine, if_exists='replace', index=False, method='multi')
-    
+    try:
+        logger.info(f"Creating {table_prefix}_full_season table...")
+        df.to_sql(f'{table_prefix}_full_season', conn.engine, if_exists='replace', index=False,  method='multi', chunksize=500)
+        logger.info(f"✅ {table_prefix}_full_season' inserted.")
+    except Exception as e:
+        logger.error(f"❌ Failed to write {table_prefix}_full_season': {str(e)}") 
 
     if is_pitcher:
         per_game_df = df.apply(lambda row: prorate_pitcher(row, name_col, col_map), axis=1)
@@ -153,10 +156,12 @@ def process_dataset(df, name_col, table_prefix, conn, col_map=None, is_pitcher=F
     # Convert mlbamid to string in per-game DataFrame
     if 'mlbamid' in per_game_df.columns:
         per_game_df['mlbamid'] = per_game_df['mlbamid'].astype(str)
-    
-    logger.info(f"Creating {table_prefix}_per_game table...")
-    per_game_df.to_sql(f'{table_prefix}_per_game', conn.engine, if_exists='replace', index=False, method='multi')
-    
+    try:
+        logger.info(f"Creating {table_prefix}_per_game table...")
+        per_game_df.to_sql(f'{table_prefix}_per_game', conn.engine, if_exists='replace', index=False, method='multi', chunksize=500)
+        logger.info(f"✅ {table_prefix}_per_game' inserted.")
+    except Exception as e:
+        logger.error(f"❌ Failed to write {table_prefix}_per_game': {str(e)}")    
     return (df, per_game_df)
 
 # Create the database connection
