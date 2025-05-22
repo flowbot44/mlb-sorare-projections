@@ -112,7 +112,7 @@ def run_full_update():
 
         # Step 1: Run fangraph_fetcher to download CSVs
         print("Running fangraph_fetcher.py...")
-        #subprocess.run(["python3", os.path.join(script_dir, "fangraph_fetcher.py")], check=True)
+        subprocess.run(["python3", os.path.join(script_dir, "fangraph_fetcher.py")], check=True)
 
         # Optional delay if needed
         time.sleep(5)
@@ -126,7 +126,7 @@ def run_full_update():
 
         # Step 3: Run depth_projection to process CSVs into PostgreSQL DB
         print("Running depth_projection.py...")
-        #subprocess.run(["python3", os.path.join(script_dir, "depth_projection.py")], check=True)
+        subprocess.run(["python3", os.path.join(script_dir, "depth_projection.py")], check=True)
 
         # Step 4: Run update_stadiums to ensure stadium data is current
         print("Running update_stadiums.py...")
