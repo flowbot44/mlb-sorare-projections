@@ -703,20 +703,22 @@ def process_hitter(conn, game_data, hitter_data, injuries, game_week_id):
     """, (player_name, game_id, player_team_id, mlbam_id, game_id))
     existing = c.fetchone()
 
-    if existing:
-        c.execute("""
-            UPDATE adjusted_projections 
-            SET sorare_score = %s, game_date = %s
-            WHERE (player_name = %s AND game_id = %s AND team_id = %s) OR
-                (mlbam_id = %s AND game_id = %s)
-        """, (final_score, local_date, player_name, game_id, player_team_id, mlbam_id, game_id))
-    else:
-        c.execute("""
-            INSERT INTO adjusted_projections 
-            (player_name, mlbam_id, game_id, game_date, sorare_score, game_week, team_id) 
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
-        """, (player_name, mlbam_id, game_id, local_date, final_score, game_week_id, player_team_id))
-
+    try:
+        if existing:
+            c.execute("""
+                UPDATE adjusted_projections 
+                SET sorare_score = %s, game_date = %s
+                WHERE (player_name = %s AND game_id = %s AND team_id = %s) OR
+                    (mlbam_id = %s AND game_id = %s)
+            """, (final_score, local_date, player_name, game_id, player_team_id, mlbam_id, game_id))
+        else:
+            c.execute("""
+                INSERT INTO adjusted_projections 
+                (player_name, mlbam_id, game_id, game_date, sorare_score, game_week, team_id) 
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+            """, (player_name, mlbam_id, game_id, local_date, final_score, game_week_id, player_team_id))
+    except Exception as e:
+            print(f"‼️ INSERT FAILED for {player_name} — {e}")
 
 def process_pitcher(conn, game_data, pitcher_data, injuries, game_week_id, is_starter=False):
     # Unpack game_data with local_date
@@ -839,19 +841,22 @@ def process_pitcher(conn, game_data, pitcher_data, injuries, game_week_id, is_st
     """, (player_name, game_id, player_team_id, mlbam_id, game_id))
     existing = c.fetchone()
 
-    if existing:
-        c.execute("""
-            UPDATE adjusted_projections 
-            SET sorare_score = %s, game_date = %s
-            WHERE (player_name = %s AND game_id = %s AND team_id = %s) OR
-                (mlbam_id = %s AND game_id = %s)
-        """, (final_score, local_date, player_name, game_id, player_team_id, mlbam_id, game_id))
-    else:
-        c.execute("""
-            INSERT INTO adjusted_projections 
-            (player_name, mlbam_id, game_id, game_date, sorare_score, game_week, team_id) 
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
-        """, (player_name, mlbam_id, game_id, local_date, final_score, game_week_id, player_team_id))
+    try:
+        if existing:
+            c.execute("""
+                UPDATE adjusted_projections 
+                SET sorare_score = %s, game_date = %s
+                WHERE (player_name = %s AND game_id = %s AND team_id = %s) OR
+                    (mlbam_id = %s AND game_id = %s)
+            """, (final_score, local_date, player_name, game_id, player_team_id, mlbam_id, game_id))
+        else:
+            c.execute("""
+                INSERT INTO adjusted_projections 
+                (player_name, mlbam_id, game_id, game_date, sorare_score, game_week, team_id) 
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+            """, (player_name, mlbam_id, game_id, local_date, final_score, game_week_id, player_team_id))
+    except Exception as e:
+        print(f"‼️ INSERT FAILED for {player_name} — {e}")
 
 def add_projected_starting_pitchers(conn, start_date, end_date):
     """
@@ -1082,6 +1087,7 @@ def calculate_adjustments(conn, start_date, end_date, game_week_id):
             process_pitcher(conn, game_data, pitcher_dict, injuries, game_week_id, is_starter=is_starter)
     
     conn.commit()
+    print("✅ Committed adjusted_projections to database.")
 
 # --- Main Function ---
 def main(update_rosters=False, specified_date=None):
