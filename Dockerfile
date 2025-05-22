@@ -28,7 +28,7 @@ ENV CHROMEDRIVER_PATH=/usr/bin/chromedriver
 ENV SELENIUM_HEADLESS=true
 
 # Expose the port the app runs on
-EXPOSE 5000
+EXPOSE 8080
 
 # Command to run the application
 CMD ["gunicorn", "--bind", "0.0.0.0:8080", "--timeout", "300", "flask_app:app"]
