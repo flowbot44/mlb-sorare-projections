@@ -166,10 +166,10 @@ try:
     conn = engine.connect()
     if conn is None:
         raise Exception("Failed to create database connection.")
-    logger.error("Successfully connected to the database.")
+    logger.info("Successfully connected to the database.")
     
     # Process standard hitters dataset
-    logger.info("\n=== PROCESSING STANDARD HITTERS DATASET ===")
+    logger.info("=== PROCESSING STANDARD HITTERS DATASET ===")
     hitter_columns = check_csv_columns(hitter_file)
     if not hitter_columns:
         logger.error("Error with hitter file, exiting.")
@@ -203,7 +203,7 @@ try:
     hitters_result = process_dataset(hitters, hitter_name_col, "hitters", conn, hitter_col_map)
     
     # Process standard pitchers dataset
-    logger.info("\n=== PROCESSING STANDARD PITCHERS DATASET ===")
+    logger.info("=== PROCESSING STANDARD PITCHERS DATASET ===")
     pitcher_columns = check_csv_columns(pitcher_file)
     if not pitcher_columns:
         logger.error("Error with pitcher file, exiting.")
@@ -232,7 +232,7 @@ try:
     pitchers_result = process_dataset(pitchers, pitcher_name_col, "pitchers", conn, pitcher_col_map, is_pitcher=True)
     
     # Process hitters vs RHP dataset
-    logger.info("\n=== PROCESSING HITTERS VS RHP DATASET ===")
+    logger.info("=== PROCESSING HITTERS VS RHP DATASET ===")
     if os.path.exists(hitter_vs_rhp_file):
         hitter_vs_rhp_columns = check_csv_columns(hitter_vs_rhp_file)
         if not hitter_vs_rhp_columns:
@@ -265,7 +265,7 @@ try:
         logger.error(f"Hitter vs RHP file not found: {hitter_vs_rhp_file}")
     
     # Process hitters vs LHP dataset
-    logger.info("\n=== PROCESSING HITTERS VS LHP DATASET ===")
+    logger.info("=== PROCESSING HITTERS VS LHP DATASET ===")
     if os.path.exists(hitter_vs_lhp_file):
         hitter_vs_lhp_columns = check_csv_columns(hitter_vs_lhp_file)
         if not hitter_vs_lhp_columns:
@@ -297,7 +297,7 @@ try:
     else:
         logger.info(f"Hitter vs LHP file not found: {hitter_vs_lhp_file}")
     
-    logger.info("\nAll projections have been freshly imported and generated in 'mlb_sorare.db'.")
+    logger.info("All projections have been freshly imported and generated in 'mlb_sorare.db'.")
 
 except Exception as e:
     logger.error(f"An error occurred: {e}")
