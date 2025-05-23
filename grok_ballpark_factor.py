@@ -832,16 +832,16 @@ def process_pitcher(conn, game_data, pitcher_data, injuries, game_week_id, is_st
     base_score = calculate_sorare_pitcher_score(adjusted_stats, SCORING_MATRIX)
 
     if not is_starter:
-        # If not a starter, apply a reduction to the score
+        # If not a starter, apply a reduction to the score as they don't pitch every game
         base_score *= 0.4
-
-    handedness_adjusted_score = apply_handedness_matchup_adjustment(
-        conn, game_id, mlbam_id, is_pitcher=True, base_score=base_score
-    )
+    else:
+        base_score = apply_handedness_matchup_adjustment(
+            conn, game_id, mlbam_id, is_pitcher=True, base_score=base_score
+        )
 
     # Try to find injury data with the unique key first, then fall back to just the name
     injury_data = injuries.get(unique_player_key, injuries.get(player_name, {'status': 'Active', 'return_estimate': None}))
-    final_score = adjust_score_for_injury(handedness_adjusted_score, injury_data['status'], injury_data['return_estimate'], game_date_obj)
+    final_score = adjust_score_for_injury(base_score, injury_data['status'], injury_data['return_estimate'], game_date_obj)
 
     # Check if this player already has a projection for this game
     c.execute("""

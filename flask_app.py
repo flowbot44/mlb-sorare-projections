@@ -47,9 +47,9 @@ app.jinja_env.globals.update(zip=zip)
 script_dir = os.path.dirname(os.path.abspath(__file__))
 
 
-# Default lineup parameters (same as in discord_bot.py)
+# Default lineup parameters 
 DEFAULT_ENERGY_LIMITS = {"rare": 50, "limited": 50}
-BOOST_2025 = 5.0
+BOOST_2025 = 2.0
 STACK_BOOST = 2.0
 ENERGY_PER_CARD = 25
 DEFAULT_LINEUP_ORDER = [
@@ -744,30 +744,14 @@ def update_data():
         # Determine current game week
         current_game_week = determine_game_week()
 
-        if not db_exists:
-            # Database doesn't exist, run full update
-            success = run_full_update()
-            if not success:
-                return jsonify({'error': "Failed to initialize database. Check logs for details."})
-        else:
-            # Check if projections exist for the current game week
-            projections_exist = check_if_projections_exist(current_game_week)
+        # Just update injury data and projections
+        print(f"Updating existing projections for game week {current_game_week}")
+        injury_data = fetch_injury_data()
+        if injury_data:
+            update_database(injury_data)
 
-            if not projections_exist:
-                # First time for this game week - run full update
-                print(f"No projections found for game week {current_game_week} - running full update")
-                success = run_full_update()
-                if not success:
-                    return jsonify({'error': "Failed to run full update. Check logs for details."})
-            else:
-                # Just update injury data and projections
-                print(f"Updating existing projections for game week {current_game_week}")
-                injury_data = fetch_injury_data()
-                if injury_data:
-                    update_database(injury_data)
-
-                # Update projections
-                update_projections()
+        # Update projections
+        update_projections()
 
         return jsonify({
             'success': True,
@@ -825,10 +809,35 @@ def check_db():
         # In PostgreSQL, there is no built-in "last modified" timestamp for the whole database file.
         # As an alternative, you can get the latest modification time from a key table (e.g., adjusted_projections)
         try:
-            cursor.execute("SELECT MAX(updated_at) FROM adjusted_projections")
+            cursor.execute("SELECT MAX(timestamp) FROM weather_forecasts")
             db_modified_row = cursor.fetchone()
-            db_modified = db_modified_row[0].strftime("%Y-%m-%d %H:%M") if db_modified_row and db_modified_row[0] else "Unknown"
-        except Exception:
+            logger.info(f"DB last modified row: {db_modified_row}")
+            if db_modified_row and db_modified_row[0]:
+                # Convert string to datetime if necessary
+                utc_time = db_modified_row[0]
+                if isinstance(utc_time, str):
+                    try:
+                        # Try parsing with microseconds first, then without
+                        try:
+                            utc_time = datetime.strptime(utc_time, "%Y-%m-%d %H:%M:%S.%f")
+                        except ValueError:
+                            utc_time = datetime.strptime(utc_time, "%Y-%m-%d %H:%M:%S")
+                        utc_time = utc_time.replace(tzinfo=pytz.utc)
+                    except Exception as parse_exc:
+                        logger.error(f"Error parsing timestamp string: {parse_exc}")
+                        db_modified = "Unknown"
+                        utc_time = None
+                if utc_time:
+                    if utc_time.tzinfo is None:
+                        utc_time = utc_time.replace(tzinfo=pytz.utc)
+                    eastern = pytz.timezone('America/New_York')
+                    db_modified = utc_time.astimezone(eastern).strftime("%Y-%m-%d %I:%M %p ET")
+                else:
+                    db_modified = "Unknown"
+            else:
+                db_modified = "Unknown"
+        except Exception as e:
+            logger.error(f"Error getting timestamp: {str(e)}")
             db_modified = "Unknown"
 
         conn.close() # Close connection here after all queries
@@ -849,22 +858,6 @@ def check_db():
             'message': str(e)
         })
 
-@app.route('/run_full_update', methods=['POST'])
-def full_update_route():
-    """Trigger a full update of the database from scratch"""
-    try:
-        success = run_full_update()
-        if success:
-            return jsonify({
-                'success': True,
-                'message': "Full database update completed successfully."
-            })
-        else:
-            return jsonify({
-                'error': "Failed to complete full database update. Check logs for details."
-            })
-    except Exception as e:
-        return jsonify({'error': f"Error during full update: {str(e)}"})
 
 @app.route('/projections')
 @app.route('/projections/<game_week_id>')
