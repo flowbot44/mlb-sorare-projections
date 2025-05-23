@@ -67,21 +67,15 @@ def prorate_hitter(row, name_col, col_map=None):
     # Try to get mlbamid if available
     if 'mlbamid' in row.index:
         result['mlbamid'] = str(row['mlbamid'])  # Convert to string
-    
+    per_game_stats = ['r', 'rbi', 'singles', 'doubles', 'triples', 'hr', 'bb', 'so', 'sb', 'cs', 'hbp']
     if actual_games == 0:
-        for stat in ['r', 'rbi', '1b', '2b', '3b', 'hr', 'bb', 'so', 'sb', 'cs', 'hbp']:
+        for stat in per_game_stats:
             result[f'{stat}_per_game'] = 0.0
     else:
-        for stat in ['r', 'rbi', '1b', '2b', '3b', 'hr', 'bb', 'so', 'sb', 'cs', 'hbp']:
+        for stat in per_game_stats:
             value = safe_get_col(row, stat, col_map)
             if stat == 'so':
                 result['k_per_game'] = value / actual_games
-            elif stat == '1b':
-                result['singles_per_game'] = value / actual_games
-            elif stat == '2b':
-                result['doubles_per_game'] = value / actual_games
-            elif stat == '3b':
-                result['triples_per_game'] = value / actual_games
             else:
                 result[f'{stat}_per_game'] = value / actual_games
     
