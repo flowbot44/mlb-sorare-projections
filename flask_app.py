@@ -9,12 +9,14 @@ from datetime import datetime, timedelta, date
 import math
 import numpy as np
 import pytz
+import json
+import traceback
 
 # Import existing functionality
 from chatgpt_lineup_optimizer import (
     fetch_cards, fetch_projections, build_all_lineups,
     Config,
-    fetch_high_rain_games_details
+    fetch_high_rain_games_details, build_daily_lineups
 )
 from card_fetcher import SorareMLBClient
 from injury_updates import fetch_injury_data, update_database
@@ -27,12 +29,11 @@ from grok_ballpark_factor import (
 )
 from utils import (
     get_db_connection,
-    get_wind_effect,
-    get_wind_effect_label,
-    get_temp_adjustment,
+    get_sqlalchemy_engine,
     calculate_hr_factors,
     get_weather_summary,
-    get_top_hr_players
+    get_top_hr_players,
+    determine_daily_game_week
 )
 import logging
 import psycopg2 # Import psycopg2 for specific error handling
@@ -59,8 +60,6 @@ DEFAULT_LINEUP_ORDER = [
     "Limited All-Star_1", "Limited All-Star_2", "Limited All-Star_3",
     "Common Minors"
 ]
-
-
 
 # Configure logging
 logging.basicConfig(
@@ -421,14 +420,11 @@ def generate_lineup():
         except Exception as e:
             return jsonify({'error': f"Error parsing game IDs: {str(e)}. Make sure all IDs are valid integers."})
 
-    # Parse custom lineup order
-    try:
-        custom_lineup_order = [lineup.strip() for lineup in lineup_order.split(',')]
-        Config.PRIORITY_ORDER = custom_lineup_order
-    except Exception as e:
-        # Fallback to default order on error
-        Config.PRIORITY_ORDER = DEFAULT_LINEUP_ORDER
-        return jsonify({'error': f"Error parsing lineup order: {str(e)}. Using default order."})
+    
+    custom_lineup_order = [
+    lineup[1:].strip() if lineup and not lineup[0].isalnum() else lineup.strip()
+    for lineup in lineup_order.split(',')
+]
 
     # Set energy limits
     energy_limits = {
@@ -466,14 +462,16 @@ def generate_lineup():
             boost_2025=boost_2025,
             stack_boost=stack_boost,
             energy_per_card=energy_per_card,
-            ignore_list=ignore_list
+            ignore_list=ignore_list,
+            custom_lineup_order=custom_lineup_order
         )
+
 
         # Calculate total energy used
         total_energy_used = {"rare": 0, "limited": 0}
-        for lineup_type in Config.PRIORITY_ORDER:
-            data = lineups[lineup_type]
-            if data["cards"]:
+        for lineup_type in custom_lineup_order:
+            data = lineups.get(lineup_type)
+            if data and data["cards"]:
                 total_energy_used["rare"] += data["energy_used"]["rare"]
                 total_energy_used["limited"] += data["energy_used"]["limited"]
 
@@ -589,7 +587,7 @@ def generate_lineup():
             stack_boost=stack_boost,
             energy_per_card=energy_per_card,
             game_week=determine_game_week(),
-            priority_order=Config.PRIORITY_ORDER,
+            priority_order=custom_lineup_order,
             lineup_slots=Config.LINEUP_SLOTS,
             total_energy_used=total_energy_used,
             missing_projections=missing_projections_list,
@@ -608,7 +606,13 @@ def generate_lineup():
         })
 
     except Exception as e:
-        return jsonify({'error': f"Error generating lineup: {str(e)}"})
+        error_type = type(e).__name__
+        tb = traceback.format_exc()
+        logger.error(f"Error generating lineup: {error_type}: {e}\n{tb}")
+        return jsonify({
+            'error': f"Error generating lineup: {error_type}: {e}",
+            'traceback': tb
+        }), 500
 
 @app.route('/platoon', methods=['GET', 'POST'])
 def platoon():
@@ -1170,6 +1174,56 @@ def get_game_weather_data(specified_date=None):
         "hr_rankings": hr_odds_rankings,
         "hr_players": hr_players
     }
+
+
+@app.route("/daily", methods=["GET"])
+def daily_form():
+    return render_template("daily.html")
+
+@app.route("/daily-lineup", methods=["POST"])
+def generate_daily_lineup():
+    username = request.form["username"]
+    ignore_players = request.form.get("ignore_players", "").split(",")
+    boost_2025 = float(request.form.get("boost_2025", 0.0))
+    stack_boost = float(request.form.get("stack_boost", 2.0))
+    rare_energy = int(request.form.get('rare_energy', 0))
+    limited_energy = int(request.form.get('limited_energy', 0))
+
+    ignore_list = [p.strip() for p in ignore_players if p.strip()]
+
+    energy_limits = {
+        "rare": rare_energy,
+        "limited": limited_energy
+    }
+    lineups = build_daily_lineups(username, energy_limits, boost_2025, stack_boost, ignore_list)
+
+    return render_template("partials/daily_results.html", lineups=lineups, username=username, game_week=datetime.now().strftime('%Y-%m-%d'))
+
+@app.route('/update_daily', methods=['POST'])
+def update_daily():
+    """Update injury data and projections"""
+    try:
+        # Check if database exists and create it if needed
+        db_exists = check_and_create_db()
+        print(f"Database exists update_data: {db_exists}")
+        # Determine current game week
+        current_game_week = determine_daily_game_week()
+
+        # Just update injury data and projections
+        print(f"Updating existing daily projections for game week {current_game_week}")
+        injury_data = fetch_injury_data()
+        if injury_data:
+            update_database(injury_data)
+
+        # Update projections
+        update_projections(daily=True)
+
+        return jsonify({
+            'success': True,
+            'message': f"Data updated successfully for game week {current_game_week}."
+        })
+    except Exception as e:
+        return jsonify({'error': f"Error updating data: {str(e)}"})
 
 @app.route('/hr-odds')
 @app.route('/hr-odds/<date_str>')

@@ -5,22 +5,24 @@
 {% block content %}
 <h2 class="mt-4">Submit Platoon Player</h2>
 <form method="POST" class="mb-4">
-    <div class="mb-3">
-        <label for="name" class="form-label">Player Name</label>
-        <input list="name-options" class="form-control" id="name" name="name" required>
-        <datalist id="name-options">
-            {% for pair in name_id_pairs %}
-                <option value="{{ pair[0] }}" data-id="{{ pair[1] }}"></option>
-            {% endfor %}
-        </datalist>
-        <input type="hidden" id="mlbam_id" name="mlbam_id">
-    </div>
-    <div class="mb-3">
-        <label for="starts_vs" class="form-label">Starts vs</label>
-        <select class="form-select" id="starts_vs" name="starts_vs" required>
-            <option value="L">Left-handed Pitcher</option>
-            <option value="R">Right-handed Pitcher</option>
-        </select>
+    <div class="row mb-3">
+        <div class="col-md-6">
+            <label for="name" class="form-label">Player Name</label>
+            <input list="name-options" class="form-control" id="name" name="name" required>
+            <datalist id="name-options">
+                {% for pair in name_id_pairs %}
+                    <option value="{{ pair[0] }}" data-id="{{ pair[1] }}"></option>
+                {% endfor %}
+            </datalist>
+            <input type="hidden" id="mlbam_id" name="mlbam_id">
+        </div>
+        <div class="col-md-6">
+            <label for="starts_vs" class="form-label">Starts vs</label>
+            <select class="form-select" id="starts_vs" name="starts_vs" required>
+                <option value="L">Left-handed Pitcher</option>
+                <option value="R">Right-handed Pitcher</option>
+            </select>
+        </div>
     </div>
     <button type="submit" class="btn btn-primary">Submit</button>
 </form>

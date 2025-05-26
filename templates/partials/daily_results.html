@@ -1,0 +1,12 @@
+{% for lineup_type, data in lineups.items() if data.cards %}
+<div class="card mb-3">
+  <div class="card-header bg-secondary text-white">
+    <strong>{{ lineup_type }}</strong> – Score: {{ data.projected_score }}
+  </div>
+  <ul class="list-group list-group-flush">
+    {% for card, slot, score in zip(data.cards, data.slot_assignments, data.projections) %}
+    <li class="list-group-item">{{ slot }} – {{ card }} – {{ "%.2f"|format(score) }}</li>
+    {% endfor %}
+  </ul>
+</div>
+{% endfor %}
