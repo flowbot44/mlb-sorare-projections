@@ -445,3 +445,21 @@ def get_top_hr_players(conn, game_date, team_rankings, limit=25):
     
     # Return top N players
     return sorted_players[:limit]
+
+
+def determine_daily_game_week(current_date=None) -> str:
+    """Return daily game week in format YYYY-MM-DD_to_YYYY-MM-DD"""
+    if current_date is None:
+        current_date = datetime.now().date()
+    elif isinstance(current_date, str):
+        current_date = datetime.strptime(current_date, '%Y-%m-%d').date()
+    weekday = current_date.weekday()
+
+    if weekday < 4:  # Mon–Thu
+        start = current_date - timedelta(days=weekday)
+        end = start + timedelta(days=3)
+    else:  # Fri–Sun
+        start = current_date - timedelta(days=weekday - 4)
+        end = start + timedelta(days=2)
+
+    return f"{start.isoformat()}_to_{end.isoformat()}"

@@ -3,10 +3,19 @@ from ortools.sat.python import cp_model
 import os
 import argparse
 from typing import Dict, List, Set, Optional
-from utils import determine_game_week, get_db_connection, get_sqlalchemy_engine  # Add get_sqlalchemy_engine
+from utils import determine_game_week, get_db_connection, get_sqlalchemy_engine, determine_daily_game_week # Add get_sqlalchemy_engine
 from datetime import datetime, timedelta
 from pandas.errors import DatabaseError
-
+import json
+import logging
+import traceback
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[logging.StreamHandler()]
+)
+logger = logging.getLogger("lineup_optimizer")
 
 # Configuration Constants
 class Config:
@@ -25,6 +34,11 @@ class Config:
         "Limited Challenger_1", "Limited Challenger_2",
         "Common Minors"
     ]
+    DAILY_LINEUP_ORDER = [
+        "Rare Derby", "Rare Swing",
+        "Limited Derby", "Limited Swing",
+        "Common Derby", "Common Swing"        
+    ]
     ALL_STAR_LIMITS = {
         "Rare All-Star": {"max_limited": 3, "allowed_rarities": {"rare", "limited"}},
         "Limited All-Star": {"max_common": 3, "allowed_rarities": {"limited", "common"}}
@@ -38,7 +52,137 @@ class Config:
     }
     POSITIONS["H"] = POSITIONS["CI"] | POSITIONS["MI"] | POSITIONS["OF"]
     POSITIONS["Flx"] = POSITIONS["CI"] | POSITIONS["MI"] | POSITIONS["OF"] | POSITIONS["RP"]
+    POSITIONS["Flx+"] = POSITIONS["CI"] | POSITIONS["MI"] | POSITIONS["OF"] | POSITIONS["RP"] | POSITIONS["SP"]
     LINEUP_SLOTS = ["SP", "RP", "CI", "MI", "OF", "H", "Flx"]
+    DAILY_LINEUP_SLOTS = ["SP", "RP", "CI", "MI", "OF", "H", "Flx+"]
+
+def create_lineups_table():
+    
+    """Create the lineups table if it doesn't exist."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    create_table_query = """
+    CREATE TABLE IF NOT EXISTS lineups (
+        id SERIAL PRIMARY KEY,
+        username VARCHAR(100) NOT NULL,
+        game_week VARCHAR(50) NOT NULL,
+        lineup_type VARCHAR(50) NOT NULL,
+        cards JSON NOT NULL,
+        slot_assignments JSON NOT NULL,
+        projections JSON NOT NULL,
+        projected_score DECIMAL(10,2) NOT NULL,
+        energy_used JSON NOT NULL,
+        boost_2025 DECIMAL(5,2) NOT NULL,
+        stack_boost DECIMAL(5,2) NOT NULL,
+        energy_per_card INT NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE (username, game_week, lineup_type)
+    );
+    """
+    
+    create_index_query = """
+    CREATE INDEX IF NOT EXISTS idx_username_gameweek ON lineups (username, game_week);
+    """
+
+    try:
+        cursor.execute(create_table_query)
+        cursor.execute(create_index_query)
+        conn.commit()
+        logger.info("Lineups table created or verified successfully")
+    except Exception as e:
+        logger.error(f"Error creating lineups table: {e}")
+        conn.rollback()
+    finally:
+        cursor.close()
+        conn.close()
+
+def save_lineups_to_database(lineups: Dict[str, Dict], username: str, game_week: str,
+                           boost_2025: float, stack_boost: float, energy_per_card: int, custom_lineup_order: list[str]) -> None:
+    """Save lineups to the database, replacing existing ones for the same username and game week."""
+    create_lineups_table()  # Ensure table exists
+    
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    try:
+        # First, delete existing lineups for this username and game week
+        delete_query = """
+        DELETE FROM lineups 
+        WHERE username = %s AND game_week = %s
+        """
+        cursor.execute(delete_query, (username, game_week))
+        deleted_count = cursor.rowcount
+        if deleted_count > 0:
+            logger.info(f"Deleted {deleted_count} existing lineups for {username} in game week {game_week}")
+        
+        # Insert new lineups
+        insert_query = """
+        INSERT INTO lineups (
+            username, game_week, lineup_type, cards, slot_assignments, 
+            projections, projected_score, energy_used, boost_2025, 
+            stack_boost, energy_per_card
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """
+        logger.info(custom_lineup_order)
+        inserted_count = 0
+        for lineup_type in custom_lineup_order:
+            data = lineups.get(lineup_type)
+            logger.info(f"Saving lineups to database for {username} in game week {game_week} with type {lineup_type} and cards  ")
+            if data and data["cards"]:  # Only save lineups that have cards
+                cursor.execute(insert_query, (
+                    username,
+                    game_week,
+                    lineup_type,
+                    json.dumps(data["cards"]),
+                    json.dumps(data["slot_assignments"]),
+                    json.dumps(data["projections"]),
+                    data["projected_score"],
+                    json.dumps(data["energy_used"]),
+                    boost_2025,
+                    stack_boost,
+                    energy_per_card
+                ))
+                inserted_count += 1
+                
+        
+        conn.commit()
+        logger.info(f"Successfully saved {inserted_count} lineups to database for {username} in game week {game_week}")
+        
+    except Exception as e:
+        logger.error(
+            f"Error saving lineups to database for {username} in game week {game_week}: {e}\n"
+            f"Traceback: {traceback.format_exc()}"
+        )
+    finally:
+        cursor.close()
+        conn.close()
+
+def get_used_card_slugs(username: str, game_week: str) -> Set[str]:
+    """Get slugs of cards already used in a game week."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            "SELECT cards FROM lineups WHERE username = %s AND game_week = %s",
+            (username, game_week)
+        )
+        results = cursor.fetchall()
+        used = set()
+        for row in results:
+            cards = row[0]
+            if isinstance(cards, str):
+                used.update(json.loads(cards))
+            elif isinstance(cards, list):
+                used.update(cards)
+        return used
+    except Exception as e:
+        logger.error(f"Error loading used cards: {e}")
+        return set()
+    finally:
+        cursor.close()
+        conn.close()
 
 def fetch_cards(username: str) -> pd.DataFrame:
     """Fetch eligible cards with team info from the database."""
@@ -108,6 +252,35 @@ def fetch_projections(ignore_game_ids: Optional[List] = None) -> pd.DataFrame:
     
     return projections_df
 
+
+def fetch_daily_projections(ignore_game_ids: Optional[List] = None) -> pd.DataFrame:
+    """
+    Fetch Sorare projections for games scheduled today (Eastern time),
+    using `local_date` from the `games` table.
+    """
+    engine = get_sqlalchemy_engine()
+    today = datetime.now().date().isoformat()  # e.g., '2025-05-24'
+
+    query = """
+        SELECT player_name, team_id, SUM(sorare_score) AS total_projection
+        FROM adjusted_projections ap
+        JOIN games g ON ap.game_id = g.id
+        WHERE g.local_date = %s
+    """
+    params = [today]
+
+    if ignore_game_ids:
+        placeholder = ','.join(['%s'] * len(ignore_game_ids))
+        query += f" AND ap.game_id NOT IN ({placeholder})"
+        params.extend(ignore_game_ids)
+
+    query += " GROUP BY player_name, team_id"
+
+    df = pd.read_sql(query, engine, params=tuple(params))
+    df["total_projection"] = df["total_projection"].fillna(0).infer_objects()
+    return df
+
+
 def can_fill_position(card_positions: Optional[str], slot: str) -> bool:
     """Check if a card can fill the given position slot."""
     if pd.isna(card_positions):
@@ -150,15 +323,19 @@ def filter_cards_by_lineup_type(cards_df: pd.DataFrame, lineup_type: str) -> pd.
     elif "All-Star" in lineup_type:
         limits = Config.ALL_STAR_LIMITS.get(f"{rarity.capitalize()} All-Star", {})
         return cards_df[cards_df["rarity"].isin(limits["allowed_rarities"])]
+    elif "Derby" in lineup_type:
+        return cards_df[cards_df["rarity"] == rarity]
+    elif "Swing" in lineup_type:
+        return cards_df[cards_df["rarity"] == rarity]
     return cards_df
 
 def uses_energy_lineup(lineup_type: str) -> bool:
     """Determine if a lineup type uses energy."""
-    return "All-Star" in lineup_type or "Champion" in lineup_type
+    return "All-Star" in lineup_type or "Champion" in lineup_type or "Derby" in lineup_type
 
 def build_lineup(cards_df: pd.DataFrame, lineup_type: str, used_cards: Set[str],
                  remaining_energy: Dict[str, int], boost_2025: float, stack_boost: float,
-                 energy_per_card: int) -> Dict:
+                 energy_per_card: int, lineup_slots: list[str] = Config.LINEUP_SLOTS) -> Dict:
     """Build a single lineup by prioritizing highest projected cards across all positions."""
     available_cards = cards_df[~cards_df["slug"].isin(used_cards)].copy()
     available_cards = apply_boosts(available_cards, lineup_type, boost_2025)
@@ -171,14 +348,14 @@ def build_lineup(cards_df: pd.DataFrame, lineup_type: str, used_cards: Set[str],
     rarity_count = {"common": 0, "limited": 0, "rare": 0}
     team_counts = {}
     energy_used = {"rare": 0, "limited": 0}
-    remaining_slots = Config.LINEUP_SLOTS.copy()
+    remaining_slots = lineup_slots.copy()
 
     rarity = get_rarity_from_lineup_type(lineup_type)
     uses_energy = uses_energy_lineup(lineup_type)
-
+    
     # Add effective projection with stacking
     available_cards["effective_projection"] = available_cards["selection_projection"]
-    for slot in Config.LINEUP_SLOTS:
+    for slot in lineup_slots:
         is_hitting_slot = slot in ["CI", "MI", "OF", "H", "Flx"]
         if is_hitting_slot:
             available_cards.loc[
@@ -244,7 +421,7 @@ def build_lineup(cards_df: pd.DataFrame, lineup_type: str, used_cards: Set[str],
 
 def build_lineup_optimized(cards_df: pd.DataFrame, lineup_type: str, used_cards: Set[str],
                            remaining_energy: Dict[str, int], boost_2025: float, stack_boost: float,
-                           energy_per_card: int) -> Dict:
+                           energy_per_card: int, lineup_slots: list[str] = Config.LINEUP_SLOTS) -> Dict:
     """Build a lineup using OR-Tools with a second pass for stacking boosts (hitters only)."""
 
     def run_optimization(cards, projections_override=None):
@@ -257,14 +434,14 @@ def build_lineup_optimized(cards_df: pd.DataFrame, lineup_type: str, used_cards:
             card_vars.append(var)
 
             slot_vars = {}
-            for slot in Config.LINEUP_SLOTS:
+            for slot in lineup_slots:
                 if can_fill_position(card["positions"], slot):
                     slot_vars[slot] = model.NewBoolVar(f"{i}_{slot}")
             card_slot_vars.append(slot_vars)
 
         model.Add(sum(card_vars) == 7)
 
-        for slot in Config.LINEUP_SLOTS:
+        for slot in lineup_slots:
             model.Add(sum(card_slot_vars[i].get(slot, 0) for i in range(len(cards))) == 1)
 
         for i, slot_vars in enumerate(card_slot_vars):
@@ -282,7 +459,6 @@ def build_lineup_optimized(cards_df: pd.DataFrame, lineup_type: str, used_cards:
         rarity = get_rarity_from_lineup_type(lineup_type)
         uses_energy = uses_energy_lineup(lineup_type)
         limits = Config.ALL_STAR_LIMITS.get(f"{rarity.capitalize()} All-Star", {}) if "All-Star" in lineup_type else {}
-
         for rar in ["common", "limited", "rare"]:
             max_key = f"max_{rar}"
             indices = [i for i, c in enumerate(cards) if c["rarity"] == rar]
@@ -372,90 +548,103 @@ def build_lineup_optimized(cards_df: pd.DataFrame, lineup_type: str, used_cards:
                 energy_used[card["rarity"]] += energy_per_card
                 remaining_energy[card["rarity"]] -= energy_per_card
 
+     # Sort lineup, slots, and projections by the order of lineup_slots
+    slot_order = {slot: idx for idx, slot in enumerate(lineup_slots)}
+    sorted_entries = sorted(
+        zip(lineup, slots, projections),
+        key=lambda x: slot_order.get(x[1], 999)
+    )
+    lineup, slots, projections = zip(*sorted_entries) if sorted_entries else ([], [], [])
+
     return {
-        "cards": lineup,
-        "slot_assignments": slots,
-        "projections": projections,
+        "cards": list(lineup),
+        "slot_assignments": list(slots),
+        "projections": list(projections),
         "projected_score": round(sum(projections), 2),
         "energy_used": energy_used
     }
 
 
 def build_all_lineups(cards_df: pd.DataFrame, projections_df: pd.DataFrame, energy_limits: Dict[str, int],
-                     boost_2025: float, stack_boost: float, energy_per_card: int,
-                     ignore_list: Optional[List[str]] = None) -> Dict[str, Dict]:
-    """Build optimal lineups respecting global energy constraints."""
-    check_missing_projections(cards_df, projections_df)
+                      boost_2025: float, stack_boost: float, energy_per_card: int,
+                      ignore_list: Optional[List[str]] = None, custom_lineup_order: list[str] = Config.PRIORITY_ORDER) -> Dict[str, Dict]:
 
     if ignore_list:
-        initial_count = len(cards_df)
-        # Convert the user-provided names to uppercase for comparison
-        ignore_list_upper = {name.upper() for name in ignore_list}
-        print(f"Uppercase ignore list: {ignore_list_upper}")
+        cards_df = cards_df[~cards_df['name'].str.upper().isin({n.upper() for n in ignore_list})]
 
-        # Ensure the 'name' column in the DataFrame is uppercase (as stated in the user request)
-        # If it might not be, uncomment the line below:
-        # cards_df['name_upper'] = cards_df['name'].str.upper()
-
-        # Filter based on the 'name' column being in the uppercase ignore list.
-        # Assumes cards_df['name'] is already uppercase. If not, use cards_df['name_upper']
-        cards_df = cards_df[~cards_df['name'].isin(ignore_list_upper)]
-        filtered_count = len(cards_df)
-        print(f"Ignored {initial_count - filtered_count} cards based on case-insensitive name list: {ignore_list}")
-    
-    cards_df = cards_df.merge(
-        projections_df, 
-        left_on=["name", "team_id"], 
-        right_on=["player_name", "team_id"], 
-        how="left"
-    ).fillna({"total_projection": 0}).infer_objects()
-    
-    used_cards = set()
-    remaining_energy = energy_limits.copy()
-    lineups = {key: {"cards": [], "slot_assignments": [], "projections": [], "projected_score": 0, "energy_used": {"rare": 0, "limited": 0}}
-               for key in Config.PRIORITY_ORDER}
-    
-    # First, process all energy-using lineups
-    energy_lineups = [lt for lt in Config.PRIORITY_ORDER if uses_energy_lineup(lt)]
-    non_energy_lineups = [lt for lt in Config.PRIORITY_ORDER if not uses_energy_lineup(lt)]
-    
-    # Process energy lineups in priority order
-    first = True
-    for lineup_type in energy_lineups:
-        if first:
-            lineup_data = build_lineup(  # Use greedy for first
-                cards_df, lineup_type, used_cards, remaining_energy, 
-                boost_2025, stack_boost, energy_per_card
-            )
-            first = False
-        else:
-            lineup_data = build_lineup_optimized(  # Use OR-Tools for rest
-            cards_df, lineup_type, used_cards, remaining_energy, 
-            boost_2025, stack_boost, energy_per_card
-        )
-
-        if lineup_data["cards"]:
-            lineups[lineup_type] = lineup_data
-            used_cards.update(lineup_data["cards"])
-    
-    # Then process non-energy lineups in priority order
-    for lineup_type in non_energy_lineups:
-        if first:
-            lineup_data = build_lineup(  # Use greedy for first
-                cards_df, lineup_type, used_cards, remaining_energy, 
-                boost_2025, stack_boost, energy_per_card
-            )
-            first = False
-        else:
-            lineup_data = build_lineup_optimized(  # Use OR-Tools for rest
-            cards_df, lineup_type, used_cards, remaining_energy, 
-            boost_2025, stack_boost, energy_per_card
-        )
-        if lineup_data["cards"]:
-            lineups[lineup_type] = lineup_data
-            used_cards.update(lineup_data["cards"])
-    
+    cards_df = merge_projections(cards_df, projections_df)
+    lineups = generate_lineups_from_cards(cards_df, boost_2025, stack_boost, energy_per_card, energy_limits, custom_lineup_order)
+    save_lineups_to_database(lineups, Config.USERNAME, determine_game_week(), boost_2025, stack_boost, energy_per_card, custom_lineup_order)
     return lineups
+
+def build_daily_lineups(username: str,  energy_limits: Dict[str, int], boost_2025: float, stack_boost: float,
+                        ignore_players: Optional[List[str]] = None, custom_lineup_order: list[str] = Config.DAILY_LINEUP_ORDER,
+                        lineup_slots: list[str] = Config.DAILY_LINEUP_SLOTS, derby_lineup_slots: list[str] = Config.DAILY_LINEUP_SLOTS) -> Dict[str, Dict]:
+    energy_per_card = 10
+    game_week = determine_daily_game_week()
+
+    used_cards = get_used_card_slugs(username, game_week)
+    cards_df = get_eligible_cards(username, ignore_players, used_cards)
+    projections_df = fetch_daily_projections()
+    cards_df = merge_projections(cards_df, projections_df)
+
+    lineups = generate_lineups_from_cards(cards_df, boost_2025, stack_boost, energy_per_card, energy_limits, custom_lineup_order, lineup_slots, derby_lineup_slots)
+
+    return lineups
+
+def generate_lineups_from_cards(cards_df: pd.DataFrame, boost_2025: float, stack_boost: float,
+                                energy_per_card: int, energy_limits: Dict[str, int], custom_lineup_order: list[str],
+                                lineup_slots: list[str] = Config.LINEUP_SLOTS, derby_lineup_slots: list[str] = Config.LINEUP_SLOTS) -> Dict[str, Dict]:
+    """Generate full set of lineups using greedy and OR-Tools builders."""
+    used_card_slugs = set()
+    remaining_energy = energy_limits.copy()
+
+    lineups = {lt: {"cards": [], "slot_assignments": [], "projections": [], "projected_score": 0,
+                    "energy_used": {"rare": 0, "limited": 0}} for lt in custom_lineup_order}
+
+    energy_lineups = [lt for lt in custom_lineup_order if uses_energy_lineup(lt)]
+    non_energy_lineups = [lt for lt in custom_lineup_order if not uses_energy_lineup(lt)]
+
+    first = True
+    for lineup_type in energy_lineups + non_energy_lineups:
+        #builder = build_lineup if first else build_lineup_optimized
+        lineup_data = build_lineup_optimized(
+            cards_df, lineup_type, used_card_slugs, remaining_energy,
+            boost_2025, stack_boost, energy_per_card, lineup_slots
+        )
+        if lineup_data["cards"]:
+            lineups[lineup_type] = lineup_data
+            used_card_slugs.update(lineup_data["cards"])
+        #first = False
+
+
+
+    return lineups
+
+def merge_projections(cards_df: pd.DataFrame, projections_df: pd.DataFrame) -> pd.DataFrame:
+    """Merge cards with projections, defaulting missing values to zero."""
+    merged = cards_df.merge(
+        projections_df,
+        left_on=["name", "team_id"],
+        right_on=["player_name", "team_id"],
+        how="left"
+    )
+    merged = merged.infer_objects()
+    merged = merged.fillna({"total_projection": 0})
+    return merged
+
+def get_eligible_cards(username: str, ignore_list: Optional[List[str]] = None, used_card_slugs: Optional[Set[str]] = None) -> pd.DataFrame:
+    """Fetch cards excluding sealed and used/ignored players."""
+    cards_df = fetch_cards(username)
+
+    if used_card_slugs:
+        cards_df = cards_df[~cards_df["slug"].isin(used_card_slugs)]
+
+    if ignore_list:
+        ignore_set = {name.strip().upper() for name in ignore_list}
+        cards_df = cards_df[~cards_df["name"].str.upper().isin(ignore_set)]
+
+    return cards_df
 
 def fetch_high_rain_games_details():
     """
@@ -689,12 +878,9 @@ def save_lineups(lineups: Dict[str, Dict], output_file: str, energy_limits: Dict
                 f.write("Cards:\n")
                 
                 # Sort cards by consistent position order
-                ordered_slots = Config.LINEUP_SLOTS
+
                 card_entries = list(zip(data["cards"], data["slot_assignments"], data["projections"]))
-                
-                # Sort by position slot
-                card_entries.sort(key=lambda x: ordered_slots.index(x[1]) if x[1] in ordered_slots else 999)
-                
+                               
                 for card, slot, proj in card_entries:
                     f.write(f"  {slot}: {card} - {proj:.2f}\n")
                 

@@ -1,0 +1,98 @@
+{% extends "base.html" %}
+
+{% block title %}Daily Lineup Optimizer{% endblock %}
+
+{% block extra_css %}
+<link href="/static/css/main.css" rel="stylesheet">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
+{% endblock %}
+
+{% block content %}
+<div class="optimizer-container">
+  <h1 class="text-center mb-4">Daily Sorare MLB Lineup Optimizer</h1>
+
+  <div class="alert alert-info text-center">
+    This tool excludes sealed cards and any card already used in this game week.
+  </div>
+
+  <form id="dailyLineupForm" method="POST">
+    <div class="row mb-3">
+      <div class="col-md-6">
+        <label for="username" class="form-label">Sorare Username</label>
+        <input type="text" class="form-control" id="username" name="username" required>
+      </div>
+      <div class="col-md-6">
+        <label for="ignore_players" class="form-label">Ignore Players (comma-separated)</label>
+        <input type="text" class="form-control" id="ignore_players" name="ignore_players">
+      </div>
+    </div>
+    <div class="row mb-3">
+      <div class="col-md-4">
+          <label for="rare_energy" class="form-label">Rare Energy</label>
+          <input type="number" class="form-control" id="rare_energy" name="rare_energy" value="0">
+      </div>
+      <div class="col-md-3">
+          <label for="limited_energy" class="form-label">Limited Energy</label>
+          <input type="number" class="form-control" id="limited_energy" name="limited_energy" value="0">
+      </div>
+    </div>
+    <div class="row mb-3">
+      <div class="col-md-4">
+        <label for="boost_2025" class="form-label">2025 Card Boost</label>
+        <input type="number" step="0.1" class="form-control" id="boost_2025" name="boost_2025" value="0.0">
+      </div>
+      <div class="col-md-4">
+        <label for="stack_boost" class="form-label">Stack Boost</label>
+        <input type="number" step="0.1" class="form-control" id="stack_boost" name="stack_boost" value="2.0">
+      </div>
+    </div>
+
+    <div class="mb-3">
+      <button type="submit" class="btn btn-primary w-100">Generate Daily Lineups</button>
+    </div>
+    <div class="d-grid gap-2 mt-2">
+      <button type="button" id="updateDailyBtn" class="btn btn-secondary w-100">
+        Update Daily Projections
+      </button>
+    </div>
+  </form>
+
+  <div id="resultsSection" class="mt-4" style="display: none;">
+    <h3>Results for <span id="results-username"></span></h3>
+    <div class="lineup-content" id="lineupResults"></div>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+document.getElementById("dailyLineupForm").addEventListener("submit", function(e) {
+  e.preventDefault();
+  const username = document.getElementById("username").value;
+  const form = e.target;
+  const formData = new FormData(form);
+  document.getElementById("results-username").textContent = username;
+  fetch("/daily-lineup", {
+    method: "POST",
+    body: formData
+  })
+  .then(res => res.text())
+  .then(html => {
+    document.getElementById("lineupResults").innerHTML = html;
+    document.getElementById("resultsSection").style.display = "block";
+  })
+  .catch(err => alert("Error generating lineups: " + err));
+});
+
+document.getElementById("updateDailyBtn").addEventListener("click", function () {
+  fetch("/update_daily", { method: "POST" })
+    .then(res => res.json())
+    .then(data => {
+      alert(data.message || "Daily projections updated.");
+    })
+    .catch(err => {
+      alert("Error updating projections: " + err);
+    });
+});
+</script>
+{% endblock %}

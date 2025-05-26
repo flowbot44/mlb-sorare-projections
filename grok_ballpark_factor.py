@@ -11,7 +11,8 @@ from utils import (
     get_temp_adjustment,
     wind_dir_to_degrees,
     get_platoon_start_side_by_mlbamid,
-    get_db_connection
+    get_db_connection,
+    determine_daily_game_week
 )
 import math
 import logging
@@ -1096,7 +1097,7 @@ def calculate_adjustments(conn, start_date, end_date, game_week_id):
     logger.info("✅ Committed adjusted_projections to database.")
 
 # --- Main Function ---
-def main(update_rosters=False, specified_date=None):
+def main(update_rosters=False, specified_date=None, daily=False):
     try:
         # If no date is specified, use the current date in local timezone
         if specified_date is None:
@@ -1105,13 +1106,21 @@ def main(update_rosters=False, specified_date=None):
             current_date = datetime.now().date()
         else:
             current_date = specified_date
-            
+
         game_week_id = determine_game_week(current_date)  # Use the utils function
         start_date, end_date = game_week_id.split('_to_')  # Split the string for use
+        if daily:
+            game_week_id = determine_daily_game_week(current_date)  # Use the utils function
+            if not isinstance(current_date, str):
+                start_date = current_date.strftime('%Y-%m-%d')
+                end_date = start_date
+            
+
+        
         logger.info(f"Processing game week: {start_date} to {end_date}")
         conn = init_db()
         
-        game_week_id = get_schedule(conn, start_date, end_date)  # Still returns the same string
+        get_schedule(conn, start_date, end_date)  # Still returns the same string
         fetch_weather_and_store(conn, start_date, end_date)
         populate_player_teams(conn, start_date, end_date, update_rosters=update_rosters)
         calculate_adjustments(conn, start_date, end_date, game_week_id)
