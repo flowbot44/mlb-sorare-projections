@@ -11,6 +11,7 @@ import numpy as np
 import pytz
 import json
 import traceback
+import re
 
 # Import existing functionality
 from chatgpt_lineup_optimizer import (
@@ -421,11 +422,12 @@ def generate_lineup():
             return jsonify({'error': f"Error parsing game IDs: {str(e)}. Make sure all IDs are valid integers."})
 
     
+    # Remove any leading non-alphanumeric characters (like ☰) from each lineup name
     custom_lineup_order = [
-    lineup[1:].strip() if lineup and not lineup[0].isalnum() else lineup.strip()
-    for lineup in lineup_order.split(',')
-]
-
+        re.sub(r'^[^\w]+', '', lineup.strip()) if lineup else ""
+        for lineup in lineup_order.split(',')
+    ]
+    
     # Set energy limits
     energy_limits = {
         "rare": rare_energy,
@@ -668,22 +670,29 @@ def delete_platoon_player(id):
 def weather_report():
     """Generate weather report HTML that can be cached"""
     try:
-        # Use the same code from index route to get high rain games
-        high_rain_games = fetch_high_rain_games_details()
+        is_daily = request.args.get("daily", "false").lower() == "true"
 
-        # Format game dates and add team names
+        if is_daily:
+            high_rain_games = fetch_high_rain_games_details(date_filter="today")
+        else:
+            high_rain_games = fetch_high_rain_games_details()
+
         high_rain_games = format_game_dates(high_rain_games)
         high_rain_games = add_team_names_to_games(high_rain_games)
 
-        # Render the partial template directly
-        weather_html = render_template('partials/weather_report.html', high_rain_games=high_rain_games)
+        weather_html = render_template(
+            'partials/weather_report.html',
+            high_rain_games=high_rain_games
+        )
 
         return jsonify({
             'success': True,
             'weather_html': weather_html
         })
+
     except Exception as e:
         return jsonify({'error': f"Error generating weather report: {str(e)}"})
+
 
 @app.route('/fetch_cards', methods=['POST'])
 def fetch_user_cards():
@@ -1220,7 +1229,7 @@ def update_daily():
 
         return jsonify({
             'success': True,
-            'message': f"Data updated successfully for game week {current_game_week}."
+            'message': f"Data updated successfully for today in game week {current_game_week}."
         })
     except Exception as e:
         return jsonify({'error': f"Error updating data: {str(e)}"})
