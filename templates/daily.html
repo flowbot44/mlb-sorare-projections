@@ -15,6 +15,28 @@
     This tool excludes sealed cards and any card already used in this game week.
   </div>
 
+  <!-- Weather Report Container - Daily games only -->
+  <div class="weather-report-container">
+    <div class="card">
+      <div class="card-header bg-info text-white d-flex justify-content-between align-items-center">
+        <h4 class="mb-0"><i class="bi bi-cloud-rain"></i> Today's Weather Report</h4>
+        <button type="button" class="btn btn-sm btn-light" id="refreshWeatherBtn">
+          <i class="bi bi-arrow-clockwise"></i> Refresh
+        </button>
+      </div>
+      <div class="card-body">
+        <div id="weatherReport">
+          <div class="text-center">
+            <div class="spinner-border text-primary" role="status">
+              <span class="visually-hidden">Loading weather...</span>
+            </div>
+            <p class="mt-2">Loading today's weather report...</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <form id="dailyLineupForm" method="POST">
     <div class="row mb-3">
       <div class="col-md-6">
@@ -24,6 +46,25 @@
       <div class="col-md-6">
         <label for="ignore_players" class="form-label">Ignore Players (comma-separated)</label>
         <input type="text" class="form-control" id="ignore_players" name="ignore_players">
+      </div>
+    </div>
+    
+    <!-- Improved ignore games input with icons and help text -->
+    <div class="row mb-3">
+      <div class="col-md-12">
+        <label for="ignore_games" class="form-label">
+          <i class="bi bi-ban"></i> Ignore Games
+          <span class="badge bg-info" data-bs-toggle="tooltip" title="Games with rain risk are easily added from the Weather Report section above">
+            <i class="bi bi-info-circle"></i>
+          </span>
+        </label>
+        <div class="input-group">
+          <input type="text" class="form-control" id="ignore_games" name="ignore_games" placeholder="e.g. 12345, 67890">
+          <button class="btn btn-outline-secondary" type="button" id="clearIgnoreGamesBtn" title="Clear all ignored games">
+            <i class="bi bi-x-circle"></i> Clear
+          </button>
+        </div>
+        <small class="form-text text-muted">Games listed here will be excluded from lineup generation. Add games with weather concerns from the report above.</small>
       </div>
     </div>
     <div class="row mb-3">
@@ -66,6 +107,69 @@
 
 {% block extra_js %}
 <script>
+document.addEventListener('DOMContentLoaded', function() {
+  // Load saved username from localStorage if available
+  const lastUsername = localStorage.getItem('sorare-last-username');
+  const usernameInput = document.getElementById('username');
+  
+  if (lastUsername && usernameInput) {
+    usernameInput.value = lastUsername;
+  }
+  
+  // Save username to localStorage when it changes
+  usernameInput.addEventListener('input', function() {
+    const username = this.value.trim();
+    if (username) {
+      localStorage.setItem('sorare-last-username', username);
+    }
+  });
+
+  // Load today's weather report
+  loadTodayWeatherReport();
+
+  // Initialize ignore games functionality
+  initializeIgnoreGamesClearButton();
+  updateWeatherReportButtons();
+
+  // Set up event delegation for the ignore game buttons that will be added dynamically
+  document.getElementById('weatherReport').addEventListener('click', function(e) {
+    if (e.target && e.target.classList.contains('ignore-game-btn')) {
+      const gameId = e.target.getAttribute('data-game-id');
+      addGameToIgnoreList(gameId);
+      
+      // Update button state
+      e.target.classList.remove('btn-warning');
+      e.target.classList.add('btn-secondary');
+      e.target.textContent = 'Added to Ignore List';
+      e.target.disabled = true;
+      
+      // Highlight the row to indicate it's been added
+      const row = e.target.closest('tr');
+      row.classList.add('table-secondary');
+    }
+  });
+
+  // Set up the refresh weather button event listener
+  const refreshWeatherBtn = document.getElementById('refreshWeatherBtn');
+  if (refreshWeatherBtn) {
+    refreshWeatherBtn.addEventListener('click', function() {
+      this.disabled = true;
+      this.innerHTML = '<i class="bi bi-arrow-clockwise"></i> Refreshing...';
+      
+      loadTodayWeatherReport().then(() => {
+        this.disabled = false;
+        this.innerHTML = '<i class="bi bi-arrow-clockwise"></i> Refresh';
+      });
+    });
+  }
+
+  // Initialize tooltips
+  var tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
+  var tooltipList = tooltipTriggerList.map(function(tooltipTriggerEl) {
+    return new bootstrap.Tooltip(tooltipTriggerEl);
+  });
+});
+
 document.getElementById("dailyLineupForm").addEventListener("submit", function(e) {
   e.preventDefault();
   const username = document.getElementById("username").value;
@@ -94,5 +198,133 @@ document.getElementById("updateDailyBtn").addEventListener("click", function () 
       alert("Error updating projections: " + err);
     });
 });
+
+/**
+ * Load today's weather report from the server (filtered for current day only)
+ * @returns {Promise} A promise that resolves when the weather report is loaded
+ */
+function loadTodayWeatherReport() {
+  return fetch('/weather_report?daily=true')
+    .then(response => response.json())
+    .then(data => {
+      if (data.success) {
+        document.getElementById('weatherReport').innerHTML = data.weather_html;
+        
+        // After loading weather report, check which games are already in ignore list
+        updateWeatherReportButtons();
+      } else {
+        document.getElementById('weatherReport').innerHTML = '<div class="alert alert-danger">Failed to load weather report</div>';
+      }
+      return data;
+    })
+    .catch(error => {
+      document.getElementById('weatherReport').innerHTML = `<div class="alert alert-danger">Error: ${error.message}</div>`;
+      throw error;
+    });
+}
+
+/**
+ * Add a game ID to the ignore games input field
+ */
+function addGameToIgnoreList(gameId) {
+  const ignoreGamesInput = document.getElementById('ignore_games');
+  let currentIds = ignoreGamesInput.value.split(',').map(id => id.trim()).filter(id => id);
+  
+  // Only add the ID if it's not already in the list
+  if (!currentIds.includes(gameId)) {
+    currentIds.push(gameId);
+    ignoreGamesInput.value = currentIds.join(', ');
+    
+    // Show feedback to the user
+    const alertHtml = `
+      <div class="alert alert-success alert-dismissible fade show mt-2" role="alert">
+        Game ID ${gameId} added to ignore list
+        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+      </div>
+    `;
+    
+    const alertContainer = document.createElement('div');
+    alertContainer.innerHTML = alertHtml;
+    document.querySelector('.weather-report-container').appendChild(alertContainer.firstElementChild);
+    
+    // Auto dismiss after 3 seconds
+    setTimeout(() => {
+      const alert = document.querySelector('.weather-report-container .alert');
+      if (alert) {
+        alert.remove();
+      }
+    }, 3000);
+  }
+}
+
+/**
+ * Update the ignore game buttons based on what's already in the ignore list
+ */
+function updateWeatherReportButtons() {
+  const ignoreGamesInput = document.getElementById('ignore_games');
+  const currentIds = ignoreGamesInput.value.split(',').map(id => id.trim()).filter(id => id);
+  
+  // Find all the ignore game buttons in the weather report
+  const ignoreButtons = document.querySelectorAll('.ignore-game-btn');
+  
+  ignoreButtons.forEach(button => {
+    const gameId = button.getAttribute('data-game-id');
+    
+    if (currentIds.includes(gameId)) {
+      // This game is already being ignored, update the button
+      button.classList.remove('btn-warning');
+      button.classList.add('btn-secondary');
+      button.textContent = 'Added to Ignore List';
+      button.disabled = true;
+      
+      // Also update the row
+      const row = button.closest('tr');
+      if (row) {
+        row.classList.add('table-secondary');
+      }
+    }
+  });
+}
+
+/**
+ * Add a clear button to the ignore games list
+ */
+function initializeIgnoreGamesClearButton() {
+  const ignoreGamesInput = document.getElementById('ignore_games');
+  if (!ignoreGamesInput) return;
+  
+  // Find the clear button
+  let clearButton = document.getElementById('clearIgnoreGamesBtn');
+  
+  if (clearButton) {
+    // Add the event listener
+    clearButton.addEventListener('click', function() {
+      ignoreGamesInput.value = '';
+      
+      // Update the weather report buttons
+      updateWeatherReportButtons();
+      
+      // Show feedback
+      const alertHtml = `
+        <div class="alert alert-info alert-dismissible fade show mt-2" role="alert">
+          Ignore games list cleared
+          <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+        </div>
+      `;
+      
+      const alertContainer = document.createElement('div');
+      alertContainer.innerHTML = alertHtml;
+      document.querySelector('.weather-report-container').appendChild(alertContainer.firstElementChild);
+      
+      // Auto dismiss after 3 seconds
+      setTimeout(() => {
+        const alert = document.querySelector('.weather-report-container .alert');
+        if (alert) {
+          alert.remove();
+        }
+      }, 3000);
+    });
+  }
+}
 </script>
 {% endblock %}

@@ -129,7 +129,7 @@ def save_lineups_to_database(lineups: Dict[str, Dict], username: str, game_week:
         inserted_count = 0
         for lineup_type in custom_lineup_order:
             data = lineups.get(lineup_type)
-            logger.info(f"Saving lineups to database for {username} in game week {game_week} with type {lineup_type} and cards  ")
+            #logger.info(f"Saving lineups to database for {username} in game week {game_week} with type {lineup_type} and cards  ")
             if data and data["cards"]:  # Only save lineups that have cards
                 cursor.execute(insert_query, (
                     username,
@@ -165,7 +165,7 @@ def get_used_card_slugs(username: str, game_week: str) -> Set[str]:
     cursor = conn.cursor()
     try:
         cursor.execute(
-            "SELECT cards FROM lineups WHERE username = %s AND game_week = %s",
+            "SELECT cards FROM lineups WHERE username = %s AND game_week = %s AND lineup_type NOT LIKE '%%Daily%%'",
             (username, game_week)
         )
         results = cursor.fetchall()
@@ -176,6 +176,7 @@ def get_used_card_slugs(username: str, game_week: str) -> Set[str]:
                 used.update(json.loads(cards))
             elif isinstance(cards, list):
                 used.update(cards)
+        logger.info(f"Loaded {len(used)} used card slugs for {username} in game week {game_week}")  
         return used
     except Exception as e:
         logger.error(f"Error loading used cards: {e}")
@@ -422,12 +423,38 @@ def build_lineup(cards_df: pd.DataFrame, lineup_type: str, used_cards: Set[str],
 def build_lineup_optimized(cards_df: pd.DataFrame, lineup_type: str, used_cards: Set[str],
                            remaining_energy: Dict[str, int], boost_2025: float, stack_boost: float,
                            energy_per_card: int, lineup_slots: list[str] = Config.LINEUP_SLOTS) -> Dict:
-    """Build a lineup using OR-Tools with a second pass for stacking boosts (hitters only)."""
+    """Build a lineup using OR-Tools with positional scarcity awareness and stacking boosts."""
 
-    def run_optimization(cards, projections_override=None):
+    def calculate_positional_scarcity_bonus(cards, lineup_slots):
+        """Calculate bonus points for positions that are harder to fill."""
+        position_counts = {}
+        
+        # Count how many players can fill each position
+        for slot in lineup_slots:
+            count = sum(1 for card in cards if can_fill_position(card["positions"], slot))
+            position_counts[slot] = count
+        
+        # Calculate scarcity bonus (inverse of availability)
+        max_count = max(position_counts.values()) if position_counts else 1
+        scarcity_bonus = {}
+        
+        for slot, count in position_counts.items():
+            if count == 0:
+                scarcity_bonus[slot] = 0  # No bonus if position can't be filled
+            else:
+                # Higher bonus for positions with fewer available players
+                # Scale bonus to be meaningful but not overwhelming (0.1 to 1.0 range)
+                scarcity_bonus[slot] = (1.0 - (count / max_count)) * 0.5 + 0.1
+        return scarcity_bonus
+
+    def run_optimization(cards, projections_override=None, use_scarcity_bonus=True):
         model = cp_model.CpModel()
         card_vars = []
         card_slot_vars = []
+
+        # Calculate positional scarcity bonuses
+        scarcity_bonus = calculate_positional_scarcity_bonus(cards, lineup_slots) if use_scarcity_bonus else {}
+
 
         for i, card in enumerate(cards):
             var = model.NewBoolVar(f"use_{i}")
@@ -447,6 +474,7 @@ def build_lineup_optimized(cards_df: pd.DataFrame, lineup_type: str, used_cards:
         for i, slot_vars in enumerate(card_slot_vars):
             model.Add(sum(slot_vars.values()) == card_vars[i])
 
+        # Unique player constraint
         name_team_to_indices = {}
         for i, card in enumerate(cards):
             key = (card["name"], card["team_id"])
@@ -478,16 +506,44 @@ def build_lineup_optimized(cards_df: pd.DataFrame, lineup_type: str, used_cards:
                 total_energy = sum(card_vars[i] * energy_per_card for i in indices)
                 model.Add(total_energy <= remaining_energy.get(rar, 0))
 
-        # Objective
+        # Enhanced objective with positional scarcity
         proj_values = projections_override if projections_override else [
             int(card["selection_projection"] * 100) for card in cards
         ]
-        model.Maximize(sum(card_vars[i] * proj_values[i] for i in range(len(cards))))
+        
+        objective_terms = []
+        
+        # Add base projection value for each selected card
+        for i in range(len(cards)):
+            objective_terms.append(card_vars[i] * proj_values[i])
+        
+        # Add positional scarcity bonus
+        if use_scarcity_bonus and scarcity_bonus:
+            for i, card in enumerate(cards):
+                for slot, slot_var in card_slot_vars[i].items():
+                    bonus_points = int(scarcity_bonus.get(slot, 0) * 100)  # Scale to integer
+                    if bonus_points > 0:
+                        objective_terms.append(slot_var * bonus_points)
+
+        model.Maximize(sum(objective_terms))
 
         # Solve
         solver = cp_model.CpSolver()
         status = solver.Solve(model)
         return status, solver, card_vars, card_slot_vars
+
+    def check_lineup_feasibility(cards, lineup_slots):
+        """Quick check if a valid lineup is theoretically possible."""
+        logger.debug(f"\n🔎 FEASIBILITY CHECK:")
+        for slot in lineup_slots:
+            available_for_slot = sum(1 for card in cards if can_fill_position(card["positions"], slot))
+            if available_for_slot == 0:
+                logger.debug(f"  ❌ {slot}: NO PLAYERS AVAILABLE")
+                return False, f"No players available for position: {slot}"
+            else:
+                logger.debug(f"  ✅ {slot}: {available_for_slot} players available")
+        logger.debug(f"  ✅ All positions can be filled!")
+        return True, ""
 
     # Prep cards
     available_cards = cards_df[~cards_df["slug"].isin(used_cards)].copy()
@@ -499,12 +555,22 @@ def build_lineup_optimized(cards_df: pd.DataFrame, lineup_type: str, used_cards:
                 "energy_used": {"rare": 0, "limited": 0}}
 
     cards = available_cards.to_dict("records")
-
-    # --- PASS 1: Run with raw projections ---
-    status, solver, card_vars, card_slot_vars = run_optimization(cards)
-    if status != cp_model.OPTIMAL:
+    
+    # Check if lineup is theoretically possible
+    is_feasible, error_msg = check_lineup_feasibility(cards, lineup_slots)
+    if not is_feasible:
+        logger.info(f"Warning: {error_msg}")
         return {"cards": [], "slot_assignments": [], "projections": [], "projected_score": 0,
                 "energy_used": {"rare": 0, "limited": 0}}
+
+    # --- PASS 1: Run with raw projections + positional scarcity ---
+    status, solver, card_vars, card_slot_vars = run_optimization(cards)
+    if status != cp_model.OPTIMAL:
+        # Try without scarcity bonus as fallback
+        status, solver, card_vars, card_slot_vars = run_optimization(cards, use_scarcity_bonus=False)
+        if status != cp_model.OPTIMAL:
+            return {"cards": [], "slot_assignments": [], "projections": [], "projected_score": 0,
+                    "energy_used": {"rare": 0, "limited": 0}}
 
     # --- PASS 2: Count team stacks from hitters in the selected lineup ---
     team_stack_counts = {}
@@ -517,7 +583,7 @@ def build_lineup_optimized(cards_df: pd.DataFrame, lineup_type: str, used_cards:
     top_team_ids = sorted(team_stack_counts.items(), key=lambda x: -x[1])[:3]
     top_stack_teams = {team_id for team_id, _ in top_team_ids}
 
-    # --- PASS 3: Re-run optimizer with boosted projections for stacked hitters ---
+    # --- PASS 3: Re-run optimizer with boosted projections for stacked hitters + positional scarcity ---
     projections_with_stack = []
     for i, card in enumerate(cards):
         proj = card["selection_projection"]
@@ -528,8 +594,10 @@ def build_lineup_optimized(cards_df: pd.DataFrame, lineup_type: str, used_cards:
 
     status, solver, card_vars, card_slot_vars = run_optimization(cards, projections_with_stack)
     if status != cp_model.OPTIMAL:
-        return {"cards": [], "slot_assignments": [], "projections": [], "projected_score": 0,
-                "energy_used": {"rare": 0, "limited": 0}}
+        status, solver, card_vars, card_slot_vars = run_optimization(cards, projections_with_stack, use_scarcity_bonus=False)
+        if status != cp_model.OPTIMAL:
+            return {"cards": [], "slot_assignments": [], "projections": [], "projected_score": 0,
+                    "energy_used": {"rare": 0, "limited": 0}}
 
     # --- Final output ---
     lineup, slots, projections = [], [], []
@@ -548,7 +616,7 @@ def build_lineup_optimized(cards_df: pd.DataFrame, lineup_type: str, used_cards:
                 energy_used[card["rarity"]] += energy_per_card
                 remaining_energy[card["rarity"]] -= energy_per_card
 
-     # Sort lineup, slots, and projections by the order of lineup_slots
+    # Sort lineup, slots, and projections by the order of lineup_slots
     slot_order = {slot: idx for idx, slot in enumerate(lineup_slots)}
     sorted_entries = sorted(
         zip(lineup, slots, projections),
@@ -563,7 +631,6 @@ def build_lineup_optimized(cards_df: pd.DataFrame, lineup_type: str, used_cards:
         "projected_score": round(sum(projections), 2),
         "energy_used": energy_used
     }
-
 
 def build_all_lineups(cards_df: pd.DataFrame, projections_df: pd.DataFrame, energy_limits: Dict[str, int],
                       boost_2025: float, stack_boost: float, energy_per_card: int,
@@ -646,16 +713,18 @@ def get_eligible_cards(username: str, ignore_list: Optional[List[str]] = None, u
 
     return cards_df
 
-def fetch_high_rain_games_details():
+def fetch_high_rain_games_details(date_filter: Optional[str] = None):
     """
-    Fetch details for games with rain probability >= 75% for the current game week,
-    joining with Games and Stadiums tables.
+    Fetch games with rain risk, optionally filtered to today's games only (based on local_date).
     """
     engine = get_sqlalchemy_engine()
+    today = datetime.now().date().isoformat()
+
     query = """
         SELECT
             wf.game_id,
             g.date AS game_date,
+            g.local_date,
             g.time AS game_time_utc,
             wf.rain,
             wf.temp,
@@ -668,23 +737,31 @@ def fetch_high_rain_games_details():
         JOIN games g ON wf.game_id = g.id
         LEFT JOIN stadiums s ON g.stadium_id = s.id
         WHERE wf.rain >= 75
-        ORDER BY g.date ASC, g.time ASC;
     """
+
+    if date_filter == "today":
+        query += " AND g.local_date = %s ORDER BY g.local_date ASC, g.time ASC"
+        params = (today,)
+    else:
+        game_week = determine_game_week()
+        start_str, end_str = game_week.split("_to_")
+        query += " AND g.local_date BETWEEN %s AND %s ORDER BY g.local_date ASC, g.time ASC"
+        params = (start_str, end_str)
+
     try:
-        df = pd.read_sql(query, engine)
-        # Basic type conversion check
+        df = pd.read_sql(query, engine, params=params)
         df['rain'] = pd.to_numeric(df['rain'], errors='coerce')
         df['temp'] = pd.to_numeric(df['temp'], errors='coerce')
         df['wind_speed'] = pd.to_numeric(df['wind_speed'], errors='coerce')
         df['wind_dir'] = pd.to_numeric(df['wind_dir'], errors='coerce')
-        df = df.dropna(subset=['rain']) # Remove rows where rain couldn't be parsed
-        return df
-    except DatabaseError as e:
-        print(f"Database query error: {e}. Check if tables 'games' or 'stadiums' exist or have correct columns.")
-        return pd.DataFrame(columns=['game_id', 'game_date', 'game_time_utc', 'rain', 'temp', 'wind_speed', 'wind_dir', 'home_team_id', 'away_team_id', 'stadium_name'])
+        return df.dropna(subset=['rain'])
+
     except Exception as e:
-        print(f"An unexpected error occurred during fetch_high_rain_games_details: {e}")
-        return pd.DataFrame(columns=['game_id', 'game_date', 'game_time_utc', 'rain', 'temp', 'wind_speed', 'wind_dir', 'home_team_id', 'away_team_id', 'stadium_name'])
+        print(f"Error fetching high rain games: {e}")
+        return pd.DataFrame(columns=[
+            'game_id', 'game_date', 'local_date', 'game_time_utc', 'rain',
+            'temp', 'wind_speed', 'wind_dir', 'home_team_id', 'away_team_id', 'stadium_name'
+        ])
 
 def generate_weather_report() -> str:
     """Generate a more user-friendly report of high-rain games, focusing on the date."""
@@ -767,7 +844,7 @@ def generate_sealed_cards_report(username: str) -> str:
                AVG(ap.sorare_score) as avg_projected_score,
                MIN(ap.game_date) as next_game_date
         FROM cards c
-        JOIN adjustedarojections ap ON c.name = ap.player_name
+        JOIN adjusted_projections ap ON c.name = ap.player_name
         WHERE c.username = %s AND c.sealed = TRUE AND ap.game_date >= %s
         GROUP BY c.slug, c.name, c.year, c.rarity, c.positions
         ORDER BY next_game_date ASC

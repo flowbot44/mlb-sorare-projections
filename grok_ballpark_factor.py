@@ -40,7 +40,6 @@ def init_db():
     # Create or update tables - PostgreSQL syntax
     c.execute('''CREATE TABLE IF NOT EXISTS stadiums 
                  (id INTEGER PRIMARY KEY, name TEXT, lat REAL, lon REAL, orientation REAL, is_dome INTEGER)''')
-    
     c.execute('DROP TABLE IF EXISTS games CASCADE')
     c.execute('''CREATE TABLE IF NOT EXISTS games 
                  (id INTEGER PRIMARY KEY, date TEXT, time TEXT, stadium_id INTEGER, 
@@ -48,7 +47,6 @@ def init_db():
                   home_probable_pitcher_id TEXT, away_probable_pitcher_id TEXT, 
                   wind_effect_label TEXT, local_date TEXT)''')
     
-    c.execute('DROP TABLE IF EXISTS weather_forecasts CASCADE')
     c.execute('''CREATE TABLE IF NOT EXISTS weather_forecasts 
                  (id SERIAL PRIMARY KEY, game_id INTEGER, 
                   wind_dir REAL, wind_speed REAL, temp REAL, rain REAL, timestamp TEXT)''')
