@@ -6,6 +6,7 @@ import psycopg2
 from typing import Optional
 from sqlalchemy import create_engine
 from dotenv import load_dotenv
+
 import logging
 # Configure logging
 logging.basicConfig(
@@ -143,82 +144,113 @@ def get_sqlalchemy_engine():
 
 # --- HR Factor Utility Functions ---
 
-def get_wind_effect(orientation, wind_dir, wind_speed):
+def get_top_hr_players(conn, game_date, team_rankings, limit=25):
     """
-    Calculate the wind effect on home run probability.
-    Returns a factor to multiply with base HR probability.
+    Get the top players most likely to hit HRs based on individual stats and game factors.
     
     Args:
-        orientation: Stadium orientation in degrees (0-360)
-        wind_dir: Wind direction in degrees (0-360)
-        wind_speed: Wind speed in mph
+        conn: Database connection
+        game_date: Date to get HR players for
+        team_rankings: List of dictionaries with team HR factors
+        limit: Maximum number of players to return
         
     Returns:
-        float: Multiplier for HR probability
+        list: Top players with their HR probabilities
     """
-    angle_diff = (wind_dir - orientation + 180) % 360 - 180
-    if abs(angle_diff) < 45 and wind_speed > 10:
-        return 0.9  # Wind blowing in
-    elif abs(angle_diff) > 135 and wind_speed > 10:
-        return 1.1  # Wind blowing out
-    return 1.0  # Neutral wind effect
-
-def get_wind_effect_label(orientation, wind_dir):
-    """
-    Determines the wind effect label ("Out", "In", "Cross") based on the stadium's orientation and wind direction.
+    player_data = []
+    c = conn.cursor()
     
-    Args:
-        orientation: Stadium orientation in degrees (0-360)
-        wind_dir: Wind direction in degrees (0-360)
+    try:
+        # Get mapping from team name to mlb team ID
+        team_id_map = {}
+        c.execute("SELECT id, name FROM Teams")
+        teams = c.fetchall()
+        for team_id, team_name in teams:
+            team_id_map[team_name] = team_id
         
-    Returns:
-        str: Wind effect label
-    """
-    if orientation is None or wind_dir is None:
-        return "Neutral"
-
-    angle_diff = (wind_dir - orientation + 180) % 360 - 180
-    if abs(angle_diff) < 45:
-        return "In"
-    elif abs(angle_diff) > 135:
-        return "Out"
-    else:
-        return "Cross"
-
-def get_temp_adjustment(temp):
-    """
-    Calculate temperature adjustment for home run probability.
+        # Query player projections - focusing on home run hitters
+        for team_rank in team_rankings:
+            team_name = team_rank['team']
+            if team_name not in team_id_map:
+                continue
+                
+            team_id = team_id_map[team_name]
+            hr_factor = team_rank['hr_factor']
+            
+            # Get players on this team with their projected stats
+            query = """
+            SELECT 
+                h.Name, 
+                p.mlbam_id,
+                h.HR_per_game
+            FROM 
+                hitters_per_game h
+            JOIN
+                player_teams p ON h.mlbamid = p.mlbam_id
+            WHERE 
+                p.team_id = %s AND
+                h.HR_per_game > 0
+            ORDER BY
+                h.HR_per_game DESC
+            """
+            
+            c.execute(query, (team_id,))
+            player_results = c.fetchall()
+            
+            for player in player_results:
+                name, mlbam_id, hr_per_game = player
+                
+                # Apply the game's HR factor to the player's HR rate
+                adjusted_hr_per_game = hr_per_game * hr_factor
+                
+                # Calculate HR probability for this game
+                hr_odds = 1 - (1 - adjusted_hr_per_game) ** 1  # Probability of at least 1 HR
+                
+                # Add player to the list
+                player_data.append({
+                    'name': name,
+                    'mlbam_id': mlbam_id,
+                    'team': team_name,
+                    'team_abbrev': team_rank['abbrev'],
+                    'opponent': team_rank['opponent'],
+                    'is_home': team_rank['is_home'],
+                    'game_id': team_rank['game_id'],
+                    'stadium': team_rank['stadium'],
+                    'game_time': team_rank['time'],
+                    'hr_per_game': hr_per_game,
+                    'adjusted_hr_per_game': adjusted_hr_per_game,
+                    'hr_odds_pct': hr_odds * 100,  # Convert to percentage
+                    'game_hr_factor': hr_factor
+                })
+    finally:
+        c.close()
     
-    Args:
-        temp: Temperature in Fahrenheit
-        
-    Returns:
-        float: Multiplier for HR probability
-    """
-    if temp > 80:
-        return 1.05  # Hot weather increases HR
-    elif temp < 60:
-        return 0.95  # Cold weather decreases HR
-    return 1.0  # Neutral temperature effect
-
-def wind_dir_to_degrees(wind_dir):
-    """
-    Convert cardinal wind direction to degrees.
+    # Sort by adjusted HR probability
+    sorted_players = sorted(player_data, key=lambda x: x['hr_odds_pct'], reverse=True)
     
-    Args:
-        wind_dir: String wind direction (e.g., "N", "SE", "WSW")
-        
-    Returns:
-        float: Wind direction in degrees
-    """
-    directions = {
-        'N': 0, 'NNE': 22.5, 'NE': 45, 'ENE': 67.5, 'E': 90, 'ESE': 112.5,
-        'SE': 135, 'SSE': 157.5, 'S': 180, 'SSW': 202.5, 'SW': 225, 'WSW': 247.5,
-        'W': 270, 'WNW': 292.5, 'NW': 315, 'NNW': 337.5
-    }
-    return directions.get(wind_dir.upper() if wind_dir else 'N', 0)
+    # Return top N players
+    return sorted_players[:limit]
+
+
+def determine_daily_game_week(current_date=None) -> str:
+    """Return daily game week in format YYYY-MM-DD_to_YYYY-MM-DD"""
+    if current_date is None:
+        current_date = datetime.now().date()
+    elif isinstance(current_date, str):
+        current_date = datetime.strptime(current_date, '%Y-%m-%d').date()
+    weekday = current_date.weekday()
+
+    if weekday < 4:  # Mon–Thu
+        start = current_date - timedelta(days=weekday)
+        end = start + timedelta(days=3)
+    else:  # Fri–Sun
+        start = current_date - timedelta(days=weekday - 4)
+        end = start + timedelta(days=2)
+
+    return f"{start.isoformat()}_to_{end.isoformat()}"
 
 def calculate_hr_factors(conn, stadium_name, is_dome, orientation, wind_dir, wind_speed, temp):
+    from ballpark_weather import get_temp_adjustment, get_wind_effect, get_wind_effect_label
     """
     Calculate combined HR factors for a game based on stadium and weather.
     
@@ -334,132 +366,3 @@ def calculate_hr_factors(conn, stadium_name, is_dome, orientation, wind_dir, win
         'classification': classification,
         'class_color': class_color
     }
-
-def get_weather_summary(is_dome, temp, wind_speed, wind_effect_label):
-    """
-    Get a readable summary of weather conditions.
-    
-    Args:
-        is_dome: Whether the stadium is a dome
-        temp: Temperature in Fahrenheit
-        wind_speed: Wind speed in mph
-        wind_effect_label: Wind effect label (In, Out, Cross)
-        
-    Returns:
-        str: Weather summary
-    """
-    if is_dome:
-        return "Dome stadium (weather not a factor)"
-    
-    if temp is None or wind_speed is None:
-        return "Weather data unavailable"
-    
-    temp_desc = "hot" if temp > 80 else "cold" if temp < 60 else "mild"
-    wind_desc = f"{int(wind_speed)} mph {wind_effect_label or 'neutral'}"
-    
-    return f"{int(temp)}°F ({temp_desc}), {wind_desc}"
-
-def get_top_hr_players(conn, game_date, team_rankings, limit=25):
-    """
-    Get the top players most likely to hit HRs based on individual stats and game factors.
-    
-    Args:
-        conn: Database connection
-        game_date: Date to get HR players for
-        team_rankings: List of dictionaries with team HR factors
-        limit: Maximum number of players to return
-        
-    Returns:
-        list: Top players with their HR probabilities
-    """
-    player_data = []
-    c = conn.cursor()
-    
-    try:
-        # Get mapping from team name to mlb team ID
-        team_id_map = {}
-        c.execute("SELECT id, name FROM Teams")
-        teams = c.fetchall()
-        for team_id, team_name in teams:
-            team_id_map[team_name] = team_id
-        
-        # Query player projections - focusing on home run hitters
-        for team_rank in team_rankings:
-            team_name = team_rank['team']
-            if team_name not in team_id_map:
-                continue
-                
-            team_id = team_id_map[team_name]
-            hr_factor = team_rank['hr_factor']
-            
-            # Get players on this team with their projected stats
-            query = """
-            SELECT 
-                h.Name, 
-                p.mlbam_id,
-                h.HR_per_game
-            FROM 
-                hitters_per_game h
-            JOIN
-                player_teams p ON h.mlbamid = p.mlbam_id
-            WHERE 
-                p.team_id = %s AND
-                h.HR_per_game > 0
-            ORDER BY
-                h.HR_per_game DESC
-            """
-            
-            c.execute(query, (team_id,))
-            player_results = c.fetchall()
-            
-            for player in player_results:
-                name, mlbam_id, hr_per_game = player
-                
-                # Apply the game's HR factor to the player's HR rate
-                adjusted_hr_per_game = hr_per_game * hr_factor
-                
-                # Calculate HR probability for this game
-                hr_odds = 1 - (1 - adjusted_hr_per_game) ** 1  # Probability of at least 1 HR
-                
-                # Add player to the list
-                player_data.append({
-                    'name': name,
-                    'mlbam_id': mlbam_id,
-                    'team': team_name,
-                    'team_abbrev': team_rank['abbrev'],
-                    'opponent': team_rank['opponent'],
-                    'is_home': team_rank['is_home'],
-                    'game_id': team_rank['game_id'],
-                    'stadium': team_rank['stadium'],
-                    'game_time': team_rank['time'],
-                    'hr_per_game': hr_per_game,
-                    'adjusted_hr_per_game': adjusted_hr_per_game,
-                    'hr_odds_pct': hr_odds * 100,  # Convert to percentage
-                    'game_hr_factor': hr_factor
-                })
-    finally:
-        c.close()
-    
-    # Sort by adjusted HR probability
-    sorted_players = sorted(player_data, key=lambda x: x['hr_odds_pct'], reverse=True)
-    
-    # Return top N players
-    return sorted_players[:limit]
-
-
-def determine_daily_game_week(current_date=None) -> str:
-    """Return daily game week in format YYYY-MM-DD_to_YYYY-MM-DD"""
-    if current_date is None:
-        current_date = datetime.now().date()
-    elif isinstance(current_date, str):
-        current_date = datetime.strptime(current_date, '%Y-%m-%d').date()
-    weekday = current_date.weekday()
-
-    if weekday < 4:  # Mon–Thu
-        start = current_date - timedelta(days=weekday)
-        end = start + timedelta(days=3)
-    else:  # Fri–Sun
-        start = current_date - timedelta(days=weekday - 4)
-        end = start + timedelta(days=2)
-
-    return f"{start.isoformat()}_to_{end.isoformat()}"

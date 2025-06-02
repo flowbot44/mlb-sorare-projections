@@ -6,6 +6,7 @@ from typing import Dict, List, Set, Optional
 from utils import determine_game_week, get_db_connection, get_sqlalchemy_engine, determine_daily_game_week # Add get_sqlalchemy_engine
 from datetime import datetime, timedelta
 from pandas.errors import DatabaseError
+from ballpark_weather import find_pressure_hr_boosts
 import json
 import logging
 import traceback
@@ -657,6 +658,8 @@ def build_daily_lineups(username: str,  energy_limits: Dict[str, int], boost_202
 
     lineups = generate_lineups_from_cards(cards_df, boost_2025, stack_boost, energy_per_card, energy_limits, custom_lineup_order, lineup_slots, derby_lineup_slots)
 
+    logger.info(f"presure data {find_pressure_hr_boosts()}")
+
     return lineups
 
 def generate_lineups_from_cards(cards_df: pd.DataFrame, boost_2025: float, stack_boost: float,
@@ -713,96 +716,6 @@ def get_eligible_cards(username: str, ignore_list: Optional[List[str]] = None, u
 
     return cards_df
 
-def fetch_high_rain_games_details(date_filter: Optional[str] = None):
-    """
-    Fetch games with rain risk, optionally filtered to today's games only (based on local_date).
-    """
-    engine = get_sqlalchemy_engine()
-    today = datetime.now().date().isoformat()
-
-    query = """
-        SELECT
-            wf.game_id,
-            g.date AS game_date,
-            g.local_date,
-            g.time AS game_time_utc,
-            wf.rain,
-            wf.temp,
-            wf.wind_speed,
-            wf.wind_dir,
-            g.home_team_id,
-            g.away_team_id,
-            s.name as stadium_name
-        FROM weather_forecasts wf
-        JOIN games g ON wf.game_id = g.id
-        LEFT JOIN stadiums s ON g.stadium_id = s.id
-        WHERE wf.rain >= 75
-    """
-
-    if date_filter == "today":
-        query += " AND g.local_date = %s ORDER BY g.local_date ASC, g.time ASC"
-        params = (today,)
-    else:
-        game_week = determine_game_week()
-        start_str, end_str = game_week.split("_to_")
-        query += " AND g.local_date BETWEEN %s AND %s ORDER BY g.local_date ASC, g.time ASC"
-        params = (start_str, end_str)
-
-    try:
-        df = pd.read_sql(query, engine, params=params)
-        df['rain'] = pd.to_numeric(df['rain'], errors='coerce')
-        df['temp'] = pd.to_numeric(df['temp'], errors='coerce')
-        df['wind_speed'] = pd.to_numeric(df['wind_speed'], errors='coerce')
-        df['wind_dir'] = pd.to_numeric(df['wind_dir'], errors='coerce')
-        return df.dropna(subset=['rain'])
-
-    except Exception as e:
-        print(f"Error fetching high rain games: {e}")
-        return pd.DataFrame(columns=[
-            'game_id', 'game_date', 'local_date', 'game_time_utc', 'rain',
-            'temp', 'wind_speed', 'wind_dir', 'home_team_id', 'away_team_id', 'stadium_name'
-        ])
-
-def generate_weather_report() -> str:
-    """Generate a more user-friendly report of high-rain games, focusing on the date."""
-    report_lines = []
-    report_lines.append("\n## WEATHER WATCH: Potential Rain Impact ##\n")
-
-    try:
-        high_rain_games = fetch_high_rain_games_details()
-
-        if high_rain_games.empty:
-            report_lines.append("No games found with a high rain probability (>= 75%) in the forecast.")
-        else:
-            report_lines.append(f"Found {len(high_rain_games)} game(s) with >= 75% rain probability:")
-            report_lines.append("These games *may* face delays or postponement:\n")
-
-            for _, game in high_rain_games.iterrows():
-                game_id = int(game['game_id'])
-                stadium_name = game['stadium_name'] if pd.notna(game['stadium_name']) else "Unknown Stadium"
-                away_team = f"Team {game['away_team_id']}"
-                home_team = f"Team {game['home_team_id']}"
-
-                game_date_str = "Date Unknown"
-                try:
-                    # Parse the date string (assuming YYYY-MM-DD format from DB)
-                    game_date_obj = datetime.strptime(str(game['game_date']), '%Y-%m-%d').date()
-                    # Format the date clearly
-                    game_date_str = game_date_obj.strftime("%a, %b %d, %Y") # Format: Fri, Apr 11, 2025
-                except ValueError as date_err:
-                    print(f"Warning: Could not parse game date '{game['game_date']}' for game {game_id}. Error: {date_err}")
-                except Exception as general_date_err:
-                     print(f"Warning: An error occurred during date formatting for game {game_id}. Error: {general_date_err}")
-
-                report_lines.append(f"  - Forecast: {game['rain']:.0f}% Rain - Date: {game_date_str} - Location: {stadium_name}") # Display formatted date
-                report_lines.append(f"  - Gameday Link: https://baseballsavant.mlb.com/preview?game_pk={game_id}")
-                report_lines.append("") # Add a blank line for readability
-
-    except Exception as e:
-        report_lines.append(f"Error generating weather report: {e}")
-        print(f"Error details in generate_weather_report: {e}") # Added print for debugging
-
-    return "\n".join(report_lines)
 
 def generate_sealed_cards_report(username: str) -> str:
     """

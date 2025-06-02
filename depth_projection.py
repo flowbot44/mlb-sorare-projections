@@ -1,3 +1,4 @@
+import numpy as np
 import pandas as pd
 import os
 from utils import get_sqlalchemy_engine, normalize_name, DATA_DIR
@@ -45,70 +46,83 @@ def determine_name_column(columns, file_type="hitter"):
     
     return name_col
 
-# Function to safely get a column value with fallbacks
-def safe_get_col(row, col_name, col_map=None):
-    col_name = col_name.lower()
-    if col_name in row.index:
-        return row[col_name]
-    elif col_map and col_name in col_map and col_map[col_name] in row.index:
-        return row[col_map[col_name]]
-    return 0  # Default to 0 if column not found
-
-# Define proration function for hitters (per game)
-def prorate_hitter(row, name_col, col_map=None):
-    actual_games = safe_get_col(row, 'g')
+# Vectorized proration function for hitters
+def prorate_hitters_vectorized(df, name_col, col_map=None):
+    """Vectorized version of hitter proration for better performance"""
+    result_df = pd.DataFrame()
     
-    result = {
-        'name': row[name_col],
-        'g': actual_games,
-        'mlbamid': str(0)  # Default as string
-    }
+    # Apply column mapping first if provided
+    work_df = df.copy()
+    if col_map:
+        work_df = work_df.rename(columns={v: k for k, v in col_map.items()})
     
-    # Try to get mlbamid if available
-    if 'mlbamid' in row.index:
-        result['mlbamid'] = str(row['mlbamid'])  # Convert to string
+    # Basic columns
+    result_df['name'] = work_df[name_col]
+    result_df['g'] = work_df['g'].fillna(0)
+    result_df['mlbamid'] = work_df.get('mlbamid', '0').astype(str)
+    
+    # Vectorized per-game calculations
+    games = work_df['g'].fillna(0)
+    
     per_game_stats = ['r', 'rbi', 'singles', 'doubles', 'triples', 'hr', 'bb', 'so', 'sb', 'cs', 'hbp']
-    if actual_games == 0:
-        for stat in per_game_stats:
-            result[f'{stat}_per_game'] = 0.0
-    else:
-        for stat in per_game_stats:
-            value = safe_get_col(row, stat, col_map)
-            if stat == 'so':
-                result['k_per_game'] = value / actual_games
-            else:
-                result[f'{stat}_per_game'] = value / actual_games
+    for stat in per_game_stats:
+        stat_values = work_df.get(stat, 0).fillna(0)
+        if stat == 'so':
+            result_df['k_per_game'] = np.where(games > 0, stat_values / games, 0.0)
+        else:
+            result_df[f'{stat}_per_game'] = np.where(games > 0, stat_values / games, 0.0)
     
-    return pd.Series(result)
+    return result_df
 
-# Define proration function for pitchers (per game)
-def prorate_pitcher(row, name_col, col_map=None):
-    games = safe_get_col(row, 'g')
+# Vectorized proration function for pitchers
+def prorate_pitchers_vectorized(df, name_col, col_map=None):
+    """Vectorized version of pitcher proration for better performance"""
+    result_df = pd.DataFrame()
     
-    result = {
-        'name': row[name_col],
-        'g': games,
-        'mlbamid': str(0)  # Default as string
-    }
+    # Apply column mapping first if provided
+    work_df = df.copy()
+    if col_map:
+        work_df = work_df.rename(columns={v: k for k, v in col_map.items()})
     
-    if 'mlbamid' in row.index:
-        result['mlbamid'] = str(row['mlbamid'])  # Convert to string
+    # Basic columns
+    result_df['name'] = work_df[name_col]
+    result_df['g'] = work_df['g'].fillna(0)
+    result_df['mlbamid'] = work_df.get('mlbamid', '0').astype(str)
     
-    if games == 0:
-        for stat in ['ip', 'so', 'h', 'er', 'bb', 'hbp', 'w', 'r', 'sv', 'hld']:
-            result[f'{stat}_per_game'] = 0.0
-    else:
-        for stat in ['ip', 'h', 'er', 'bb', 'hbp', 'w', 'r', 'hld']:
-            value = safe_get_col(row, stat, col_map)
-            result[f'{stat}_per_game'] = value / games
-        
-        so_value = safe_get_col(row, 'so', col_map)
-        result['k_per_game'] = so_value / games
-        
-        sv_value = safe_get_col(row, 'sv', col_map)
-        result['s_per_game'] = sv_value / games
+    # Vectorized per-game calculations
+    games = work_df['g'].fillna(0)
     
-    return pd.Series(result)
+    # Standard stats
+    pitcher_stats = ['ip', 'h', 'er', 'bb', 'hbp', 'w', 'r', 'hld']
+    for stat in pitcher_stats:
+        stat_values = work_df.get(stat, 0).fillna(0)
+        result_df[f'{stat}_per_game'] = np.where(games > 0, stat_values / games, 0.0)
+    
+    # Special handling for strikeouts and saves
+    so_values = work_df.get('so', 0).fillna(0)
+    result_df['k_per_game'] = np.where(games > 0, so_values / games, 0.0)
+    
+    sv_values = work_df.get('sv', 0).fillna(0)
+    result_df['s_per_game'] = np.where(games > 0, sv_values / games, 0.0)
+    
+    return result_df
+
+# Function to filter split datasets to only include players from main dataset
+def filter_split_dataset(split_df, main_df, split_name_col, main_name_col):
+    """Filter split dataset to only include players that exist in the main dataset"""
+    # Normalize both name columns for comparison
+    main_names = set(main_df[main_name_col].apply(normalize_name))
+    split_df_normalized = split_df.copy()
+    split_df_normalized[split_name_col] = split_df_normalized[split_name_col].apply(normalize_name)
+    
+    # Filter to only include players in main dataset
+    filtered_df = split_df_normalized[split_df_normalized[split_name_col].isin(main_names)]
+    
+    original_count = len(split_df)
+    filtered_count = len(filtered_df)
+    logger.info(f"Filtered dataset from {original_count} to {filtered_count} players ({original_count - filtered_count} removed)")
+    
+    return filtered_df
 
 # Process a dataset and create tables
 def process_dataset(df, name_col, table_prefix, conn, col_map=None, is_pitcher=False):
@@ -142,9 +156,9 @@ def process_dataset(df, name_col, table_prefix, conn, col_map=None, is_pitcher=F
         logger.error(f"❌ Failed to write {table_prefix}_full_season': {str(e)}") 
 
     if is_pitcher:
-        per_game_df = df.apply(lambda row: prorate_pitcher(row, name_col, col_map), axis=1)
+        per_game_df = prorate_pitchers_vectorized(df, name_col, col_map)
     else:     
-        per_game_df = df.apply(lambda row: prorate_hitter(row, name_col, col_map), axis=1)
+        per_game_df = prorate_hitters_vectorized(df, name_col, col_map)
     
     per_game_df.columns = per_game_df.columns.str.lower()
     # Convert mlbamid to string in per-game DataFrame
@@ -167,7 +181,7 @@ try:
         raise Exception("Failed to create database connection.")
     logger.info("Successfully connected to the database.")
     
-    # Process standard hitters dataset
+    # Process standard hitters dataset FIRST to get the list of valid batters
     logger.info("=== PROCESSING STANDARD HITTERS DATASET ===")
     hitter_columns = check_csv_columns(hitter_file)
     if not hitter_columns:
@@ -230,7 +244,7 @@ try:
                 
     pitchers_result = process_dataset(pitchers, pitcher_name_col, "pitchers", conn, pitcher_col_map, is_pitcher=True)
     
-    # Process hitters vs RHP dataset
+    # Process hitters vs RHP dataset (FILTERED)
     logger.info("=== PROCESSING HITTERS VS RHP DATASET ===")
     if os.path.exists(hitter_vs_rhp_file):
         hitter_vs_rhp_columns = check_csv_columns(hitter_vs_rhp_file)
@@ -242,8 +256,12 @@ try:
                 logger.error("ERROR: Could not identify name column in hitter vs RHP CSV file, skipping.")
             else:
                 logger.info(f"Reading {hitter_vs_rhp_file}...")
-                hitters_vs_rhp = pd.read_csv(hitter_vs_rhp_file)
-                hitters_vs_rhp.columns = hitters_vs_rhp.columns.str.lower()  # Convert CSV columns to lowercase
+                hitters_vs_rhp_raw = pd.read_csv(hitter_vs_rhp_file)
+                hitters_vs_rhp_raw.columns = hitters_vs_rhp_raw.columns.str.lower()  # Convert CSV columns to lowercase
+                
+                # FILTER: Only keep batters that exist in the main batters.csv
+                logger.info("Filtering hitters vs RHP to only include batters from main dataset...")
+                hitters_vs_rhp = filter_split_dataset(hitters_vs_rhp_raw, hitters, hitter_vs_rhp_name_col, hitter_name_col)
                 
                 hitter_vs_rhp_col_map = {}
                 for req_col in required_hitter_cols:
@@ -263,7 +281,7 @@ try:
     else:
         logger.error(f"Hitter vs RHP file not found: {hitter_vs_rhp_file}")
     
-    # Process hitters vs LHP dataset
+    # Process hitters vs LHP dataset (FILTERED)
     logger.info("=== PROCESSING HITTERS VS LHP DATASET ===")
     if os.path.exists(hitter_vs_lhp_file):
         hitter_vs_lhp_columns = check_csv_columns(hitter_vs_lhp_file)
@@ -275,8 +293,12 @@ try:
                 logger.error("ERROR: Could not identify name column in hitter vs LHP CSV file, skipping.")
             else:
                 logger.info(f"Reading {hitter_vs_lhp_file}...")
-                hitters_vs_lhp = pd.read_csv(hitter_vs_lhp_file)
-                hitters_vs_lhp.columns = hitters_vs_lhp.columns.str.lower()  # Convert CSV columns to lowercase
+                hitters_vs_lhp_raw = pd.read_csv(hitter_vs_lhp_file)
+                hitters_vs_lhp_raw.columns = hitters_vs_lhp_raw.columns.str.lower()  # Convert CSV columns to lowercase
+                
+                # FILTER: Only keep batters that exist in the main batters.csv
+                logger.info("Filtering hitters vs LHP to only include batters from main dataset...")
+                hitters_vs_lhp = filter_split_dataset(hitters_vs_lhp_raw, hitters, hitter_vs_lhp_name_col, hitter_name_col)
                 
                 hitter_vs_lhp_col_map = {}
                 for req_col in required_hitter_cols:
