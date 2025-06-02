@@ -1,4 +1,98 @@
 document.addEventListener('DOMContentLoaded', function () {
+    // --- Loading Messages ---
+    // Array of funny baseball-themed loading messages for lineup generation
+    const lineupLoadingMessages = [
+        "🏈 Calling up the best players from Triple-A...",
+        "⚾ Checking who's got their rally caps on...",
+        "🧢 Consulting the magic 8-ball (it's in the dugout)...",
+        "📊 Crunching numbers harder than peanut shells...",
+        "🏟️ Building your lineup from the ground up...",
+        "⚾ Teaching your players advanced sabermetrics...",
+        "🥜 Buying Cracker Jacks for good luck...",
+        "🎯 Aiming for the green monster of profits...",
+        "🏃‍♂️ Stealing second base... and third... and home...",
+        "⚾ Warming up the bullpen algorithms...",
+        "🔥 Looking for players hotter than a July doubleheader...",
+        "📈 Calculating exit velocity and launch angles...",
+        "🏆 Searching for tomorrow's MVP candidates...",
+        "⚾ Checking if anyone's on a hot streak...",
+        "🎪 Juggling stats like a circus performer...",
+        "⚾ Polishing the crystal ball for perfect predictions...",
+        "🚀 Launching algorithms into the stratosphere...",
+        "🎲 Rolling the dice on clutch performers...",
+        "⚾ Scanning the horizon for home run heroes...",
+        "🔍 Investigating who's been clutch in the clutch..."
+    ];
+
+    // Array of funny baseball-themed loading messages for projection updates
+    const projectionLoadingMessages = [
+        "📊 Updating the crystal ball with fresh stats...",
+        "🔮 Consulting the baseball gods for divine projections...",
+        "⚾ Polishing the statistical magnifying glass...",
+        "📈 Downloading the latest baseball matrix code...",
+        "🤖 Teaching robots how to hit curveballs...",
+        "📊 Recalibrating the projection cannon...",
+        "⚾ Feeding fresh data to the number-crunching hamsters...",
+        "🔧 Tightening the bolts on the prediction machine...",
+        "📡 Receiving signals from the baseball satellite...",
+        "🧮 Converting coffee into statistical projections...",
+        "⚾ Updating the algorithm's batting average...",
+        "📊 Teaching the computer to read a box score...",
+        "🎯 Fine-tuning the projection dartboard...",
+        "⚾ Syncing with the official scorer's notebook...",
+        "🔄 Refreshing the crystal ball's browser cache...",
+        "📊 Calibrating the stat-o-matic machine...",
+        "⚾ Downloading wisdom from the baseball archives...",
+        "🎯 Adjusting the accuracy dial to 'insanely precise'...",
+        "📈 Teaching spreadsheets to play small ball...",
+        "⚾ Installing the latest batting average firmware..."
+    ];
+
+    // Array of funny baseball-themed loading messages for full database updates
+    const fullUpdateLoadingMessages = [
+        "🏗️ Building a new stadium from scratch...",
+        "📚 Reading every baseball card ever printed...",
+        "⚾ Interviewing every player personally...",
+        "🏟️ Measuring every ballpark with a tape measure...",
+        "📊 Counting every grain of dirt on the infield...",
+        "⚾ Teaching the database to love baseball...",
+        "🏆 Collecting championship rings for good luck...",
+        "📈 Downloading the entire history of baseball...",
+        "⚾ Convincing statistics to behave themselves...",
+        "🔧 Installing a new scoreboard in the cloud...",
+        "📊 Training algorithms to appreciate the game...",
+        "⚾ Building relationships with every baseball stat...",
+        "🏟️ Constructing the ultimate data diamond...",
+        "📈 Teaching computers the infield fly rule...",
+        "⚾ Organizing the world's most thorough spring training..."
+    ];
+
+    function getRandomMessage(messagesArray) {
+        return messagesArray[Math.floor(Math.random() * messagesArray.length)];
+    }
+
+    function setButtonLoading(button, loadingText, originalText) {
+        console.log('Setting loading state:', loadingText); // Debug log
+        button.disabled = true;
+        button.innerHTML = `<span class="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>${loadingText}`;
+        button.dataset.originalText = originalText;
+    }
+
+    function resetButtonLoading(button) {
+        console.log('Resetting button to:', button.dataset.originalText); // Debug log
+        button.disabled = false;
+        button.innerHTML = button.dataset.originalText || button.textContent;
+    }
+
+    function showLoadingWithMessage(message) {
+        document.querySelector('.loading').style.display = 'block';
+        document.getElementById('loadingMessage').textContent = message;
+    }
+
+    function hideLoading() {
+        document.querySelector('.loading').style.display = 'none';
+    }
+
     // --- Lineup Management ---
     function initializeLineupManagement() {
         const active = document.getElementById('activeLineup');
@@ -205,9 +299,10 @@ document.addEventListener('DOMContentLoaded', function () {
                 return;
             }
 
-            // Show loading spinner
-            document.querySelector('.loading').style.display = 'block';
-            document.getElementById('loadingMessage').textContent = 'Generating lineups...';
+            // Get the generate button and set loading state
+            const generateBtn = document.getElementById('generateBtn');
+            const randomMessage = getRandomMessage(lineupLoadingMessages);
+            setButtonLoading(generateBtn, randomMessage, "Generate Lineups");
 
             // Gather form data
             const formData = new FormData(lineupForm);
@@ -219,7 +314,7 @@ document.addEventListener('DOMContentLoaded', function () {
             })
                 .then((response) => response.json())
                 .then((data) => {
-                    document.querySelector('.loading').style.display = 'none';
+                    resetButtonLoading(generateBtn);
 
                     if (data.error) {
                         alert(`Error: ${data.error}`);
@@ -234,7 +329,7 @@ document.addEventListener('DOMContentLoaded', function () {
                     }
                 })
                 .catch((error) => {
-                    document.querySelector('.loading').style.display = 'none';
+                    resetButtonLoading(generateBtn);
                     alert(`Error: ${error.message}`);
                 });
         });
@@ -243,13 +338,14 @@ document.addEventListener('DOMContentLoaded', function () {
         document.getElementById('updateDataBtn').addEventListener('click', () => {
             if (!confirm('This will update injuries and projections. Continue?')) return;
 
-            document.querySelector('.loading').style.display = 'block';
-            document.getElementById('loadingMessage').textContent = 'Updating injuries and projections...';
+            const updateBtn = document.getElementById('updateDataBtn');
+            const randomMessage = getRandomMessage(projectionLoadingMessages);
+            setButtonLoading(updateBtn, randomMessage, "Update Injuries & Projections");
 
             fetch('/update_data', { method: 'POST' })
                 .then((response) => response.json())
                 .then((data) => {
-                    document.querySelector('.loading').style.display = 'none';
+                    resetButtonLoading(updateBtn);
                     if (data.error) {
                         alert(`Error: ${data.error}`);
                     } else {
@@ -258,23 +354,23 @@ document.addEventListener('DOMContentLoaded', function () {
                     }
                 })
                 .catch((error) => {
-                    document.querySelector('.loading').style.display = 'none';
+                    resetButtonLoading(updateBtn);
                     alert(`Error: ${error.message}`);
                 });
         });
-
 
         document.getElementById('fullUpdateBtn').addEventListener('click', runFullUpdate);
     }
 
     function runFullUpdate() {
-        document.querySelector('.loading').style.display = 'block';
-        document.getElementById('loadingMessage').textContent = 'Initializing database... This will take several minutes.';
+        const fullUpdateBtn = document.getElementById('fullUpdateBtn');
+        const randomMessage = getRandomMessage(fullUpdateLoadingMessages);
+        setButtonLoading(fullUpdateBtn, randomMessage, "Initialize Database");
 
         fetch('/run_full_update', { method: 'POST' })
             .then(response => response.json())
             .then(data => {
-                document.querySelector('.loading').style.display = 'none';
+                resetButtonLoading(fullUpdateBtn);
                 if (data.error) {
                     alert(data.error);
                 } else {
@@ -283,7 +379,7 @@ document.addEventListener('DOMContentLoaded', function () {
                 }
             })
             .catch(error => {
-                document.querySelector('.loading').style.display = 'none';
+                resetButtonLoading(fullUpdateBtn);
                 alert(`Error: ${error.message}`);
             });
     }

@@ -89,7 +89,7 @@
     </div>
 
     <div class="mb-3">
-      <button type="submit" class="btn btn-primary w-100">Generate Daily Lineups</button>
+      <button type="submit" class="btn btn-primary w-100" id="generateLineupBtn">Generate Daily Lineups</button>
     </div>
     <div class="d-grid gap-2 mt-2">
       <button type="button" id="updateDailyBtn" class="btn btn-secondary w-100">
@@ -170,11 +170,72 @@ document.addEventListener('DOMContentLoaded', function() {
   });
 });
 
+// Array of funny baseball-themed loading messages for lineup generation
+const lineupLoadingMessages = [
+  "🏈 Calling up the best players from Triple-A...",
+  "⚾ Checking who's got their rally caps on...",
+  "🧢 Consulting the magic 8-ball (it's in the dugout)...",
+  "📊 Crunching numbers harder than peanut shells...",
+  "🏟️ Building your lineup from the ground up...",
+  "⚾ Teaching your players advanced sabermetrics...",
+  "🥜 Buying Cracker Jacks for good luck...",
+  "🎯 Aiming for the green monster of profits...",
+  "🏃‍♂️ Stealing second base... and third... and home...",
+  "⚾ Warming up the bullpen algorithms...",
+  "🔥 Looking for players hotter than a July doubleheader...",
+  "📈 Calculating exit velocity and launch angles...",
+  "🏆 Searching for tomorrow's MVP candidates...",
+  "⚾ Checking if anyone's on a hot streak...",
+  "🎪 Juggling stats like a circus performer..."
+];
+
+// Array of funny baseball-themed loading messages for projection updates
+const projectionLoadingMessages = [
+  "📊 Updating the crystal ball with fresh stats...",
+  "🔮 Consulting the baseball gods for divine projections...",
+  "⚾ Polishing the statistical magnifying glass...",
+  "📈 Downloading the latest baseball matrix code...",
+  "🤖 Teaching robots how to hit curveballs...",
+  "📊 Recalibrating the projection cannon...",
+  "⚾ Feeding fresh data to the number-crunching hamsters...",
+  "🔧 Tightening the bolts on the prediction machine...",
+  "📡 Receiving signals from the baseball satellite...",
+  "🧮 Converting coffee into statistical projections...",
+  "⚾ Updating the algorithm's batting average...",
+  "📊 Teaching the computer to read a box score...",
+  "🎯 Fine-tuning the projection dartboard...",
+  "⚾ Syncing with the official scorer's notebook...",
+  "🔄 Refreshing the crystal ball's browser cache..."
+];
+
+function getRandomMessage(messagesArray) {
+  return messagesArray[Math.floor(Math.random() * messagesArray.length)];
+}
+
+function setButtonLoading(button, loadingText, originalText) {
+  console.log('Setting loading state:', loadingText); // Debug log
+  button.disabled = true;
+  button.innerHTML = `<span class="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>${loadingText}`;
+  button.dataset.originalText = originalText;
+}
+
+function resetButtonLoading(button) {
+  console.log('Resetting button to:', button.dataset.originalText); // Debug log
+  button.disabled = false;
+  button.innerHTML = button.dataset.originalText || button.textContent;
+}
+
 document.getElementById("dailyLineupForm").addEventListener("submit", function(e) {
   e.preventDefault();
   const username = document.getElementById("username").value;
   const form = e.target;
   const formData = new FormData(form);
+  const generateBtn = document.getElementById("generateLineupBtn");
+  const randomMessage = getRandomMessage(lineupLoadingMessages);
+  
+  // Set loading state with random message
+  setButtonLoading(generateBtn, randomMessage, "Generate Daily Lineups");
+  
   document.getElementById("results-username").textContent = username;
   fetch("/daily-lineup", {
     method: "POST",
@@ -184,18 +245,30 @@ document.getElementById("dailyLineupForm").addEventListener("submit", function(e
   .then(html => {
     document.getElementById("lineupResults").innerHTML = html;
     document.getElementById("resultsSection").style.display = "block";
+    resetButtonLoading(generateBtn);
   })
-  .catch(err => alert("Error generating lineups: " + err));
+  .catch(err => {
+    alert("Error generating lineups: " + err);
+    resetButtonLoading(generateBtn);
+  });
 });
 
 document.getElementById("updateDailyBtn").addEventListener("click", function () {
+  const updateBtn = this;
+  const randomMessage = getRandomMessage(projectionLoadingMessages);
+  
+  // Set loading state with random message
+  setButtonLoading(updateBtn, randomMessage, "Update Daily Projections");
+  
   fetch("/update_daily", { method: "POST" })
     .then(res => res.json())
     .then(data => {
       alert(data.message || "Daily projections updated.");
+      resetButtonLoading(updateBtn);
     })
     .catch(err => {
       alert("Error updating projections: " + err);
+      resetButtonLoading(updateBtn);
     });
 });
 
