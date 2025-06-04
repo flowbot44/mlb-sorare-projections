@@ -500,7 +500,7 @@ def fetch_high_rain_games_details(date_filter: Optional[str] = None):
 
 
 def find_pressure_hr_boosts():
-    conn = get_db_connection()
+    conn = get_sqlalchemy_engine()
     query = """
     SELECT 
         wf.game_id,
