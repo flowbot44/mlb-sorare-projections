@@ -435,9 +435,6 @@ def generate_lineup():
         "limited": limited_energy
     }
 
-    if not username:
-        return jsonify({'error': "Username is required."})
-
     try:
         # FIRST: Fetch latest cards from Sorare API for this user
         sorare_client = SorareMLBClient()
@@ -466,7 +463,8 @@ def generate_lineup():
             stack_boost=stack_boost,
             energy_per_card=energy_per_card,
             ignore_list=ignore_list,
-            custom_lineup_order=custom_lineup_order
+            custom_lineup_order=custom_lineup_order,
+            username=username
         )
 
 
