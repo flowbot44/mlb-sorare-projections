@@ -20,7 +20,7 @@ logger = logging.getLogger("lineup_optimizer")
 
 # Configuration Constants
 class Config:
-    USERNAME = "flowbot44"
+
     SHOHEI_NAME = "shohei-ohtani"
     BOOST_2025 = 5.0
     STACK_BOOST = 2.0
@@ -699,14 +699,14 @@ def build_lineup_optimized(cards_df: pd.DataFrame, lineup_type: str, used_cards:
 
 def build_all_lineups(cards_df: pd.DataFrame, projections_df: pd.DataFrame, energy_limits: Dict[str, int],
                       boost_2025: float, stack_boost: float, energy_per_card: int,
-                      ignore_list: Optional[List[str]] = None, custom_lineup_order: list[str] = Config.PRIORITY_ORDER) -> Dict[str, Dict]:
+                      username: str, ignore_list: Optional[List[str]] = None, custom_lineup_order: list[str] = Config.PRIORITY_ORDER) -> Dict[str, Dict]:
 
     if ignore_list:
         cards_df = cards_df[~cards_df['name'].str.upper().isin({n.upper() for n in ignore_list})]
 
     cards_df = merge_projections(cards_df, projections_df)
     lineups = generate_lineups_from_cards(cards_df, boost_2025, stack_boost, energy_per_card, energy_limits, custom_lineup_order)
-    save_lineups_to_database(lineups, Config.USERNAME, determine_game_week(), boost_2025, stack_boost, energy_per_card, custom_lineup_order)
+    save_lineups_to_database(lineups, username, determine_game_week(), boost_2025, stack_boost, energy_per_card, custom_lineup_order)
     return lineups
 
 def build_daily_lineups(username: str,  energy_limits: Dict[str, int], boost_2025: float, stack_boost: float,
@@ -967,8 +967,6 @@ def save_lineups(lineups: Dict[str, Dict], output_file: str, energy_limits: Dict
 def parse_arguments():
     """Parse command line arguments with sensible defaults."""
     parser = argparse.ArgumentParser(description='Sorare MLB Lineup Optimizer')
-    parser.add_argument('--username', type=str, default=Config.USERNAME,
-                        help=f'Sorare username (default: {Config.USERNAME})')
     parser.add_argument('--rare-energy', type=int, default=Config.DEFAULT_ENERGY_LIMITS["rare"],
                         help=f'Rare energy limit (default: {Config.DEFAULT_ENERGY_LIMITS["rare"]})')
     parser.add_argument('--limited-energy', type=int, default=Config.DEFAULT_ENERGY_LIMITS["limited"],
@@ -1007,7 +1005,7 @@ def main():
         projections_df = fetch_projections()
         lineups = build_all_lineups(
             cards_df, projections_df, energy_limits, 
-            args.boost_2025, args.stack_boost, args.energy_per_card, ignore_list
+            args.boost_2025, args.stack_boost, args.energy_per_card, args.username, ignore_list
         )
         output_file = os.path.join("lineups", f"{args.username}.txt")
         save_lineups(
