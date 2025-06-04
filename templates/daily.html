@@ -15,7 +15,6 @@
     This tool excludes sealed cards and any card already used in this game week.
   </div>
 
-  <!-- Weather Report Container - Daily games only -->
   <div class="weather-report-container">
     <div class="card">
       <div class="card-header bg-info text-white d-flex justify-content-between align-items-center">
@@ -49,7 +48,6 @@
       </div>
     </div>
     
-    <!-- Improved ignore games input with icons and help text -->
     <div class="row mb-3">
       <div class="col-md-12">
         <label for="ignore_games" class="form-label">
@@ -101,6 +99,22 @@
   <div id="resultsSection" class="mt-4" style="display: none;">
     <h3>Results for <span id="results-username"></span></h3>
     <div class="lineup-content" id="lineupResults"></div>
+  </div>
+
+  <div class="mt-4">
+    <button class="btn btn-info w-100" type="button" data-bs-toggle="collapse" data-bs-target="#excludedLineupsCollapse" aria-expanded="false" aria-controls="excludedLineupsCollapse" id="toggleExcludedLineupsBtn">
+      <i class="bi bi-zoom-in"></i> View Excluded Lineups (Cards Used in Other Game Weeks)
+    </button>
+    <div class="collapse mt-3" id="excludedLineupsCollapse">
+      <div id="excludedLineupsContent">
+        <div class="text-center">
+          <div class="spinner-border text-primary" role="status">
+            <span class="visually-hidden">Loading excluded lineups...</span>
+          </div>
+          <p class="mt-2">Loading excluded lineups...</p>
+        </div>
+      </div>
+    </div>
   </div>
 </div>
 {% endblock %}
@@ -168,6 +182,58 @@ document.addEventListener('DOMContentLoaded', function() {
   var tooltipList = tooltipTriggerList.map(function(tooltipTriggerEl) {
     return new bootstrap.Tooltip(tooltipTriggerEl);
   });
+
+  // --- New JavaScript for Excluded Lineups ---
+  const excludedLineupsCollapseElement = document.getElementById('excludedLineupsCollapse');
+  const excludedLineupsContent = document.getElementById('excludedLineupsContent');
+  const toggleExcludedLineupsBtn = document.getElementById('toggleExcludedLineupsBtn');
+  let hasLoadedExcludedLineups = false; // Flag to load only once
+
+  excludedLineupsCollapseElement.addEventListener('show.bs.collapse', function () {
+    if (!hasLoadedExcludedLineups) {
+      const username = document.getElementById('username').value;
+      if (!username) {
+        excludedLineupsContent.innerHTML = '<div class="alert alert-warning">Please enter your Sorare Username to view excluded lineups.</div>';
+        // Prevent collapse from fully opening if no username
+        // This might require more advanced Bootstrap JS control, or just let it open with the warning.
+        // For simplicity, we'll let it open with the warning.
+        return;
+      }
+
+      // Show loading spinner
+      excludedLineupsContent.innerHTML = `
+        <div class="text-center">
+          <div class="spinner-border text-primary" role="status">
+            <span class="visually-hidden">Loading excluded lineups...</span>
+          </div>
+          <p class="mt-2">Loading excluded lineups...</p>
+        </div>
+      `;
+
+      // Fetch excluded lineups
+      fetch(`/fetch_excluded_lineups?username=${encodeURIComponent(username)}`)
+        .then(response => {
+          if (!response.ok) {
+            throw new Error('Network response was not ok');
+          }
+          return response.text();
+        })
+        .then(html => {
+          excludedLineupsContent.innerHTML = html;
+          hasLoadedExcludedLineups = true; // Set flag so it doesn't reload on subsequent expands
+        })
+        .catch(error => {
+          console.error('Error fetching excluded lineups:', error);
+          excludedLineupsContent.innerHTML = `<div class="alert alert-danger">Error loading excluded lineups: ${error.message}. Please try again later.</div>`;
+        });
+    }
+  });
+
+  // Reset hasLoadedExcludedLineups flag if username changes
+  usernameInput.addEventListener('input', function() {
+    hasLoadedExcludedLineups = false;
+  });
+
 });
 
 // Array of funny baseball-themed loading messages for lineup generation
@@ -202,7 +268,6 @@ const projectionLoadingMessages = [
   "📡 Receiving signals from the baseball satellite...",
   "🧮 Converting coffee into statistical projections...",
   "⚾ Updating the algorithm's batting average...",
-  "📊 Teaching the computer to read a box score...",
   "🎯 Fine-tuning the projection dartboard...",
   "⚾ Syncing with the official scorer's notebook...",
   "🔄 Refreshing the crystal ball's browser cache..."
@@ -381,7 +446,7 @@ function initializeIgnoreGamesClearButton() {
       const alertHtml = `
         <div class="alert alert-info alert-dismissible fade show mt-2" role="alert">
           Ignore games list cleared
-          <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+          <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label=\"Close\"></button>
         </div>
       `;
       

@@ -186,6 +186,70 @@ def get_used_card_slugs(username: str, game_week: str) -> Set[str]:
         cursor.close()
         conn.close()
 
+def get_excluded_lineup_cards_details(username: str, game_week: str) -> Dict[str, Dict]:
+    """
+    Get details of cards excluded from daily lineups because they were used in other game week lineups.
+    Returns a dictionary where keys are lineup types and values are dictionaries containing
+    'cards' (list of card details) and 'projected_score'.
+    """
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    excluded_lineups_details = {}
+    try:
+        # Fetch cards, slot assignments, and projections for non-daily lineups for the given game week
+        query = """
+        SELECT lineup_type, cards, slot_assignments, projections, projected_score
+        FROM lineups
+        WHERE username = %s AND game_week = %s AND lineup_type NOT LIKE '%%Daily%%'
+        """
+        cursor.execute(query, (username, game_week))
+        results = cursor.fetchall()
+
+        for row in results:
+            lineup_type = row[0]
+            cards_slugs = json.loads(row[1]) if isinstance(row[1], str) else row[1]
+            slot_assignments = json.loads(row[2]) if isinstance(row[2], str) else row[2]
+            projections = json.loads(row[3]) if isinstance(row[3], str) else row[3]
+            projected_score = row[4] # Get the pre-calculated projected score
+
+            # Reconstruct card details for display, similar to daily_results.html
+            excluded_cards = []
+            for i, slug in enumerate(cards_slugs):
+                # Fetch card name from the cards table using the slug
+                # We only need the name to display "slot - card name - projection"
+                card_info_query = "SELECT name FROM cards WHERE slug = %s"
+                cursor.execute(card_info_query, (slug,))
+                card_name_result = cursor.fetchone()
+                card_name = card_name_result[0] if card_name_result else slug # Fallback to slug if name not found
+
+                excluded_cards.append({
+                    "card_name": card_name, # Use 'card_name' to match expected display
+                    "slot": slot_assignments[i],
+                    "projection": projections[i]
+                })
+            
+            # Sort cards by slot order to match daily_results.html display
+            # Ensure Config.LINEUP_SLOTS is available or passed if necessary
+            slot_order = {slot: idx for idx, slot in enumerate(Config.LINEUP_SLOTS)}
+            sorted_excluded_cards = sorted(
+                excluded_cards,
+                key=lambda x: slot_order.get(x["slot"], 999)
+            )
+
+            excluded_lineups_details[lineup_type] = {
+                "cards": sorted_excluded_cards,
+                "projected_score": projected_score # Use the pre-calculated score
+            }
+
+        logger.info(f"Loaded excluded lineup card details for {username} in game week {game_week}")
+        return excluded_lineups_details
+    except Exception as e:
+        logger.error(f"Error loading excluded lineup cards details: {e}\n{traceback.format_exc()}")
+        return {}
+    finally:
+        cursor.close()
+        conn.close()
+
 def fetch_cards(username: str) -> pd.DataFrame:
     """Fetch eligible cards with team info from the database."""
     engine = get_sqlalchemy_engine()
@@ -918,7 +982,7 @@ def parse_arguments():
     parser.add_argument('--ignore-players', type=str, default=None,
                         help='Comma-separated list of player NAMES to ignore (case-insensitive)')
     parser.add_argument('--game-week', type=str, default=determine_game_week(),
-                    help='Game week in format YYYY-MM-DD_to_YYYY-MM-DD (default: dynamically determined)')
+                    help='Game week in formatYYYY-MM-DD_to_YYYY-MM-DD (default: dynamically determined)')
     
     return parser.parse_args()
 

@@ -17,7 +17,7 @@ import re
 from chatgpt_lineup_optimizer import (
     fetch_cards, fetch_projections, build_all_lineups,
     Config,
-    build_daily_lineups
+    build_daily_lineups, get_excluded_lineup_cards_details
 )
 from card_fetcher import SorareMLBClient
 from injury_updates import fetch_injury_data, update_database
@@ -1234,6 +1234,18 @@ def update_daily():
         })
     except Exception as e:
         return jsonify({'error': f"Error updating data: {str(e)}"})
+
+@app.route('/fetch_excluded_lineups')
+def fetch_excluded_lineups():
+    username = request.args.get('username')
+    if not username:
+        return jsonify({"error": "Username is required"}), 400
+
+    game_week = determine_daily_game_week() # Dynamically determine the current game week
+
+    excluded_lineups = get_excluded_lineup_cards_details(username, game_week)
+    return render_template('partials/excluded_lineups.html', excluded_lineups=excluded_lineups)
+
 
 @app.route('/hr-odds')
 @app.route('/hr-odds/<date_str>')

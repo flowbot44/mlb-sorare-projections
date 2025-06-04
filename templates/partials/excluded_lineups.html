@@ -1,0 +1,16 @@
+{% if excluded_lineups %}
+  {% for lineup_type, data in excluded_lineups.items() %}
+  <div class="card mb-3">
+    <div class="card-header bg-secondary text-white">
+      <strong>{{ lineup_type }}</strong> – Projected Score (from original lineup): {{ "%.2f"|format(data.projected_score) }}
+    </div>
+    <ul class="list-group list-group-flush">
+      {% for card in data.cards %}
+      <li class="list-group-item">{{ card.slot }} – {{ card.card_name }} – {{ "%.2f"|format(card.projection) }}</li>
+      {% endfor %}
+    </ul>
+  </div>
+  {% endfor %}
+{% else %}
+  <div class="alert alert-info">No cards were excluded due to being used in other game week lineups for this user and game week.</div>
+{% endif %}
