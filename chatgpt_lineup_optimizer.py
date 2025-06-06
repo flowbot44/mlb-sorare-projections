@@ -25,6 +25,7 @@ class Config:
     BOOST_2025 = 5.0
     STACK_BOOST = 2.0
     ENERGY_PER_NON_2025_CARD = 25
+    MAX_TEAM_STACK = 6
     DEFAULT_ENERGY_LIMITS = {"rare": 50, "limited": 50}
     PRIORITY_ORDER = [
         "Rare Champion_1", "Rare Champion_2", "Rare Champion_3",
@@ -487,7 +488,8 @@ def build_lineup(cards_df: pd.DataFrame, lineup_type: str, used_cards: Set[str],
 
 def build_lineup_optimized(cards_df: pd.DataFrame, lineup_type: str, used_cards: Set[str],
                            remaining_energy: Dict[str, int], boost_2025: float, stack_boost: float,
-                           energy_per_card: int, lineup_slots: list[str] = Config.LINEUP_SLOTS) -> Dict:
+                           energy_per_card: int, lineup_slots: list[str] = Config.LINEUP_SLOTS,
+                           max_team_stack: int = Config.MAX_TEAM_STACK) -> Dict:
     """Build a lineup using OR-Tools with positional scarcity awareness and stacking boosts."""
 
     def calculate_positional_scarcity_bonus(cards, lineup_slots):
@@ -520,11 +522,9 @@ def build_lineup_optimized(cards_df: pd.DataFrame, lineup_type: str, used_cards:
         # Calculate positional scarcity bonuses
         scarcity_bonus = calculate_positional_scarcity_bonus(cards, lineup_slots) if use_scarcity_bonus else {}
 
-
         for i, card in enumerate(cards):
             var = model.NewBoolVar(f"use_{i}")
             card_vars.append(var)
-
             slot_vars = {}
             for slot in lineup_slots:
                 if can_fill_position(card["positions"], slot):
@@ -547,6 +547,12 @@ def build_lineup_optimized(cards_df: pd.DataFrame, lineup_type: str, used_cards:
         for indices in name_team_to_indices.values():
             if len(indices) > 1:
                 model.Add(sum(card_vars[i] for i in indices) <= 1)
+
+        team_to_indices = {}
+        for i, card in enumerate(cards):
+            team_to_indices.setdefault(card["team_id"], []).append(i)
+        for team_id, indices in team_to_indices.items():
+            model.Add(sum(card_vars[i] for i in indices) <= max_team_stack)
 
         # Rarity rules
         rarity = get_rarity_from_lineup_type(lineup_type)
@@ -710,8 +716,7 @@ def build_all_lineups(cards_df: pd.DataFrame, projections_df: pd.DataFrame, ener
     return lineups
 
 def build_daily_lineups(username: str,  energy_limits: Dict[str, int], boost_2025: float, stack_boost: float,
-                        ignore_players: Optional[List[str]] = None, custom_lineup_order: list[str] = Config.DAILY_LINEUP_ORDER,
-                        lineup_slots: list[str] = Config.DAILY_LINEUP_SLOTS, derby_lineup_slots: list[str] = Config.DAILY_LINEUP_SLOTS) -> Dict[str, Dict]:
+                        ignore_players: Optional[List[str]] = None, custom_lineup_order: list[str] = Config.DAILY_LINEUP_ORDER) -> Dict[str, Dict]:
     energy_per_card = 10
     game_week = determine_daily_game_week()
 
@@ -720,7 +725,7 @@ def build_daily_lineups(username: str,  energy_limits: Dict[str, int], boost_202
     projections_df = fetch_daily_projections()
     cards_df = merge_projections(cards_df, projections_df)
 
-    lineups = generate_lineups_from_cards(cards_df, boost_2025, stack_boost, energy_per_card, energy_limits, custom_lineup_order, lineup_slots, derby_lineup_slots)
+    lineups = generate_lineups_from_cards(cards_df, boost_2025, stack_boost, energy_per_card, energy_limits, custom_lineup_order)
 
     logger.info(f"presure data {find_pressure_hr_boosts()}")
 
@@ -728,7 +733,7 @@ def build_daily_lineups(username: str,  energy_limits: Dict[str, int], boost_202
 
 def generate_lineups_from_cards(cards_df: pd.DataFrame, boost_2025: float, stack_boost: float,
                                 energy_per_card: int, energy_limits: Dict[str, int], custom_lineup_order: list[str],
-                                lineup_slots: list[str] = Config.LINEUP_SLOTS, derby_lineup_slots: list[str] = Config.LINEUP_SLOTS) -> Dict[str, Dict]:
+                                max_team_stack: int = Config.MAX_TEAM_STACK) -> Dict[str, Dict]:
     """Generate full set of lineups using greedy and OR-Tools builders."""
     used_card_slugs = set()
     remaining_energy = energy_limits.copy()
@@ -744,7 +749,8 @@ def generate_lineups_from_cards(cards_df: pd.DataFrame, boost_2025: float, stack
         #builder = build_lineup if first else build_lineup_optimized
         lineup_data = build_lineup_optimized(
             cards_df, lineup_type, used_card_slugs, remaining_energy,
-            boost_2025, stack_boost, energy_per_card, lineup_slots
+            boost_2025, stack_boost, energy_per_card, Config.LINEUP_SLOTS,
+            max_team_stack=max_team_stack
         )
         if lineup_data["cards"]:
             lineups[lineup_type] = lineup_data
