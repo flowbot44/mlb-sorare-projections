@@ -403,7 +403,8 @@ def process_hitter(
     platoon_map,
     handedness_map,
     pitcher_names,
-    projections
+    projections,
+    opposing_pitcher_id
 ):
     game_id, game_date, time, stadium_id, home_team_id, away_team_id, local_date = game_data
     game_date_obj = datetime.strptime(local_date, '%Y-%m-%d').date()
@@ -433,10 +434,14 @@ def process_hitter(
     is_dome, orientation, wind_dir, wind_speed, temp = stadium_data
 
     # Determine opposing pitcher and handedness
-    opposing_pitcher_id = pitcher_names.get(away_team_id if player_team_id == home_team_id else home_team_id)
+    
     pitcher_handedness = handedness_map.get(opposing_pitcher_id, {}).get('throws', 'Unknown')
-
-    platoon_matchup = platoon_map.get(mlbam_id)
+    # Ensure mlbam_id is int for matching, fallback to str if conversion fails
+    try:
+        platoon_key = int(mlbam_id)
+    except (TypeError, ValueError):
+        platoon_key = mlbam_id
+    platoon_matchup = platoon_map.get(platoon_key)
 
     # Select appropriate hitter stats table based on pitcher handedness
     base_stats = {
@@ -486,6 +491,7 @@ def process_hitter(
 
     # Platoon adjustment
     platoon_adjustment = 1.0
+
     if platoon_matchup and pitcher_handedness and pitcher_handedness != platoon_matchup:
         platoon_adjustment = 0.25
         base_stats = {stat: value * platoon_adjustment for stat, value in base_stats.items()}
@@ -674,6 +680,7 @@ def calculate_adjustments(conn, start_date, end_date, game_week_id):
         # Prefetch all necessary data
         c.execute("SELECT mlbam_id, bats, throws FROM player_handedness")
         handedness_map = {row[0]: {'bats': row[1], 'throws': row[2]} for row in c.fetchall()}
+        logger.info(f"Loaded {len(handedness_map)} player handedness records")
 
         c.execute("SELECT mlbam_id, team_id FROM player_teams")
         team_map = {row[0]: row[1] for row in c.fetchall()}
@@ -692,7 +699,7 @@ def calculate_adjustments(conn, start_date, end_date, game_week_id):
 
         c.execute("SELECT mlbam_id, starts_vs FROM platoon_players")
         platoon_map = {row[0]: row[1] for row in c.fetchall()}
-
+        
         c.execute("""
             SELECT i.player_name, i.status, i.return_estimate, pt.team_id
             FROM injuries i
@@ -714,6 +721,7 @@ def calculate_adjustments(conn, start_date, end_date, game_week_id):
             )
         """, (start_date, end_date, start_date, end_date))
         pitcher_names = {row[0]: normalize_name(row[1]) for row in c.fetchall()}
+        logger.info(f"Loaded {len(pitcher_names)} probable pitcher names")
 
         # Fetch games
         c.execute("""
@@ -768,16 +776,17 @@ def calculate_adjustments(conn, start_date, end_date, game_week_id):
         for game in games:
             game_id, game_date, time, stadium_id, home_team_id, away_team_id, home_pitcher_id, away_pitcher_id, local_date = game
             game_data = game[:6] + (local_date,)
-
-            # Process hitters
+             # Process hitters
             for team_id in (home_team_id, away_team_id):
+                opposing_pitcher_id = away_pitcher_id if home_team_id == team_id else home_pitcher_id
+           
                 for hitter_dict in hitters_by_team.get(team_id, []):
                     #if hitter_dict.get("mlbamid") == "660271":  # Skip Ohtani as hitter if needed
                     #    continue
                     process_hitter(
                         conn, game_data, hitter_dict, injuries, game_week_id,
                         stadium_weather_map, park_factors_map, platoon_map, handedness_map,
-                        pitcher_names, projections
+                        pitcher_names, projections, opposing_pitcher_id
                     )
 
             # Process pitchers
