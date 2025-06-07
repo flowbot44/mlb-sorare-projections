@@ -416,9 +416,9 @@ def generate_weather_report() -> str:
         high_rain_games = fetch_high_rain_games_details()
 
         if high_rain_games.empty:
-            report_lines.append("No games found with a high rain probability (>= 75%) in the forecast.")
+            report_lines.append("No games found with a high rain probability (>= 65%) in the forecast.")
         else:
-            report_lines.append(f"Found {len(high_rain_games)} game(s) with >= 75% rain probability:")
+            report_lines.append(f"Found {len(high_rain_games)} game(s) with >= 65% rain probability:")
             report_lines.append("These games *may* face delays or postponement:\n")
 
             for _, game in high_rain_games.iterrows():
@@ -471,7 +471,7 @@ def fetch_high_rain_games_details(date_filter: Optional[str] = None):
         FROM weather_forecasts wf
         JOIN games g ON wf.game_id = g.id
         LEFT JOIN stadiums s ON g.stadium_id = s.id
-        WHERE wf.rain >= 75
+        WHERE wf.rain >= 65
     """
 
     if date_filter == "today":

@@ -65,6 +65,159 @@
         <small class="form-text text-muted">Games listed here will be excluded from lineup generation. Add games with weather concerns from the report above.</small>
       </div>
     </div>
+
+    <!-- New Swing Rules Section -->
+    <div class="card mb-4">
+      <div class="card-header bg-primary text-white">
+        <h5 class="mb-0"><i class="bi bi-sliders"></i> Swing Rules</h5>
+      </div>
+      <div class="card-body">
+        <div class="row mb-3">
+          <div class="col-md-6">
+            <label for="unique_players" class="form-label">
+              Unique Players 
+              <span class="badge bg-info" data-bs-toggle="tooltip" title="Maximum number of unique players across all lineups (1-7)">
+                <i class="bi bi-info-circle"></i>
+              </span>
+            </label>
+            <select class="form-select" id="unique_players" name="unique_players">
+              <option value="1">1</option>
+              <option value="2">2</option>
+              <option value="3">3</option>
+              <option value="4">4</option>
+              <option value="5">5</option>
+              <option value="6" selected>6</option>
+              <option value="7">7</option>
+            </select>
+          </div>
+        </div>
+        
+        <h6 class="mb-3">Position Restrictions</h6>
+        <div class="row">
+          <div class="col-md-4 mb-3">
+            <label for="pos_SP" class="form-label">SP (Starting Pitcher)</label>
+            <select class="form-select position-select" id="pos_SP" name="pos_SP">
+              <option value="SP" selected>Starting Pitcher Only</option>
+              <option value="Flx+">Any Position</option>
+            </select>
+          </div>
+          
+          <div class="col-md-4 mb-3">
+            <label for="pos_RP" class="form-label">RP (Relief Pitcher)</label>
+            <select class="form-select position-select" id="pos_RP" name="pos_RP">
+              <option value="RP" selected>Relief Pitcher Only</option>
+              <option value="SP">Starting Pitcher</option>
+              <option value="Flx">Any Non-SP Position</option>
+              <option value="Flx+">Any Position</option>
+            </select>
+          </div>
+          
+          <div class="col-md-4 mb-3">
+            <label for="pos_CI" class="form-label">CI (Corner Infield)</label>
+            <select class="form-select position-select" id="pos_CI" name="pos_CI">
+              <option value="CI" selected>1B/3B/DH Only</option>
+              <option value="1B">First Base Only</option>
+              <option value="3B">Third Base Only</option>
+              <option value="DH">Designated Hitter Only</option>
+              <option value="MI">2B/SS/C Only</option>
+              <option value="2B">Second Base Only</option>
+              <option value="SS">Shortstop Only</option>
+              <option value="C">Catcher Only</option>
+              <option value="OF">Outfield Only</option>
+              <option value="H">All Hitters</option>
+              <option value="Flx">Any Non-SP Position</option>
+              <option value="Flx+">Any Position</option>
+            </select>
+          </div>
+          
+          <div class="col-md-4 mb-3">
+            <label for="pos_MI" class="form-label">MI (Middle Infield)</label>
+            <select class="form-select position-select" id="pos_MI" name="pos_MI">
+              <option value="CI">1B/3B/DH Only</option>
+              <option value="1B">First Base Only</option>
+              <option value="3B">Third Base Only</option>
+              <option value="DH">Designated Hitter Only</option>
+              <option value="MI" selected>2B/SS/C Only</option>
+              <option value="2B">Second Base Only</option>
+              <option value="SS">Shortstop Only</option>
+              <option value="C">Catcher Only</option>
+              <option value="OF">Outfield Only</option>
+              <option value="H">All Hitters</option>
+              <option value="Flx">Any Non-SP Position</option>
+              <option value="Flx+">Any Position</option>
+            </select>
+          </div>
+          
+          <div class="col-md-4 mb-3">
+            <label for="pos_OF" class="form-label">OF (Outfield)</label>
+            <select class="form-select position-select" id="pos_OF" name="pos_OF">
+              <option value="CI">1B/3B/DH Only</option>
+              <option value="1B">First Base Only</option>
+              <option value="3B">Third Base Only</option>
+              <option value="DH">Designated Hitter Only</option>
+              <option value="MI">2B/SS/C Only</option>
+              <option value="2B">Second Base Only</option>
+              <option value="SS">Shortstop Only</option>
+              <option value="C">Catcher Only</option>
+              <option value="OF" selected>Outfield Only</option>
+              <option value="H">All Hitters</option>
+              <option value="Flx">Any Non-SP Position</option>
+              <option value="Flx+">Any Position</option>
+            </select>
+          </div>
+          
+          <div class="col-md-4 mb-3">
+            <label for="pos_H" class="form-label">H (Hitter)</label>
+            <select class="form-select position-select" id="pos_H" name="pos_H">
+              <option value="H" selected>All Hitters</option>
+              <option value="CI">1B/3B/DH Only</option>
+              <option value="MI">2B/SS/C Only</option>
+              <option value="OF">Outfield Only</option>
+              <option value="C">Catcher Only</option>
+              <option value="1B">First Base Only</option>
+              <option value="2B">Second Base Only</option>
+              <option value="3B">Third Base Only</option>
+              <option value="SS">Shortstop Only</option>
+              <option value="DH">Designated Hitter Only</option>
+              <option value="Flx">Any Non-SP Position</option>
+              <option value="Flx+">Any Position</option>
+            </select>
+          </div>
+          
+          <div class="col-md-4 mb-3">
+            <label for="pos_Flx" class="form-label">Flx+ (Flex Plus)</label>
+            <select class="form-select position-select" id="pos_Flx" name="pos_Flx">
+              <option value="Flx+" selected>Any Position</option>
+              <option value="Flx">Any Non-SP Position</option>
+              <option value="H">All Hitters</option>
+              <option value="CI">1B/3B/DH Only</option>
+              <option value="MI">2B/SS/C Only</option>
+              <option value="OF">Outfield Only</option>
+              <option value="SP">Starting Pitcher Only</option>
+              <option value="RP">Relief Pitcher Only</option>
+              <option value="C">Catcher Only</option>
+              <option value="1B">First Base Only</option>
+              <option value="2B">Second Base Only</option>
+              <option value="3B">Third Base Only</option>
+              <option value="SS">Shortstop Only</option>
+              <option value="DH">Designated Hitter Only</option>
+            </select>
+          </div>
+        </div>
+        
+        <div class="row mt-3">
+          <div class="col-12">
+            <button type="button" class="btn btn-outline-secondary btn-sm" id="resetPositionRules">
+              <i class="bi bi-arrow-clockwise"></i> Reset to Defaults
+            </button>
+            <button type="button" class="btn btn-outline-info btn-sm ms-2" id="setAllHitters">
+              <i class="bi bi-people"></i> Set All Hitters to H
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <div class="row mb-3">
       <div class="col-md-4">
           <label for="rare_energy" class="form-label">Rare Energy</label>
@@ -144,6 +297,9 @@ document.addEventListener('DOMContentLoaded', function() {
   // Initialize ignore games functionality
   initializeIgnoreGamesClearButton();
   updateWeatherReportButtons();
+
+  // Initialize swing rules functionality
+  initializeSwingRules();
 
   // Set up event delegation for the ignore game buttons that will be added dynamically
   document.getElementById('weatherReport').addEventListener('click', function(e) {
@@ -288,6 +444,159 @@ function resetButtonLoading(button) {
   console.log('Resetting button to:', button.dataset.originalText); // Debug log
   button.disabled = false;
   button.innerHTML = button.dataset.originalText || button.textContent;
+}
+
+/**
+ * Initialize swing rules functionality
+ */
+function initializeSwingRules() {
+  // Load saved swing rules from localStorage
+  loadSwingRulesFromStorage();
+  
+  // Set up event listeners for position selects
+  const positionSelects = document.querySelectorAll('.position-select');
+  positionSelects.forEach(select => {
+    select.addEventListener('change', saveSwingRulesToStorage);
+  });
+  
+  // Set up unique players select listener
+  const uniquePlayersSelect = document.getElementById('unique_players');
+  if (uniquePlayersSelect) {
+    uniquePlayersSelect.addEventListener('change', saveSwingRulesToStorage);
+  }
+  
+  // Set up reset button
+  const resetBtn = document.getElementById('resetPositionRules');
+  if (resetBtn) {
+    resetBtn.addEventListener('click', function() {
+      resetPositionRulesToDefaults();
+      saveSwingRulesToStorage();
+      showSwingRulesAlert('Position rules reset to defaults', 'info');
+    });
+  }
+  
+  // Set up "Set All Hitters to H" button
+  const setAllHittersBtn = document.getElementById('setAllHitters');
+  if (setAllHittersBtn) {
+    setAllHittersBtn.addEventListener('click', function() {
+      setAllHittersToH();
+      saveSwingRulesToStorage();
+      showSwingRulesAlert('All hitter positions set to "All Hitters (H)"', 'success');
+    });
+  }
+}
+
+/**
+ * Save swing rules to localStorage
+ */
+function saveSwingRulesToStorage() {
+  const swingRules = {
+    unique_players: document.getElementById('unique_players').value,
+    positions: {}
+  };
+  
+  const positionSelects = document.querySelectorAll('.position-select');
+  positionSelects.forEach(select => {
+    const position = select.id.replace('pos_', '');
+    swingRules.positions[position] = select.value;
+  });
+  
+  localStorage.setItem('sorare-swing-rules', JSON.stringify(swingRules));
+}
+
+/**
+ * Load swing rules from localStorage
+ */
+function loadSwingRulesFromStorage() {
+  const savedRules = localStorage.getItem('sorare-swing-rules');
+  if (savedRules) {
+    try {
+      const rules = JSON.parse(savedRules);
+      
+      // Set unique players
+      if (rules.unique_players) {
+        document.getElementById('unique_players').value = rules.unique_players;
+      }
+      
+      // Set position restrictions
+      if (rules.positions) {
+        Object.keys(rules.positions).forEach(position => {
+          const select = document.getElementById(`pos_${position}`);
+          if (select && rules.positions[position]) {
+            select.value = rules.positions[position];
+          }
+        });
+      }
+    } catch (error) {
+      console.error('Error loading swing rules from storage:', error);
+    }
+  }
+}
+
+/**
+ * Reset position rules to their defaults
+ */
+function resetPositionRulesToDefaults() {
+  const defaults = {
+    'pos_SP': 'SP',
+    'pos_RP': 'RP',
+    'pos_CI': 'CI',
+    'pos_MI': 'MI',
+    'pos_OF': 'OF',
+    'pos_H': 'H',
+    'pos_Flx': 'Flx+'
+  };
+  
+  Object.keys(defaults).forEach(selectId => {
+    const select = document.getElementById(selectId);
+    if (select) {
+      select.value = defaults[selectId];
+    }
+  });
+  
+  // Reset unique players to 6
+  document.getElementById('unique_players').value = '6';
+}
+
+/**
+ * Set all hitter positions (CI, MI, OF, H, Flx+) to "H"
+ */
+function setAllHittersToH() {
+  const hitterPositions = ['pos_CI', 'pos_MI', 'pos_OF', 'pos_H', 'pos_Flx'];
+  
+  hitterPositions.forEach(posId => {
+    const select = document.getElementById(posId);
+    if (select) {
+      select.value = 'H';
+    }
+  });
+}
+
+/**
+ * Show swing rules alert message
+ */
+function showSwingRulesAlert(message, type = 'info') {
+  const alertHtml = `
+    <div class="alert alert-${type} alert-dismissible fade show mt-2" role="alert">
+      ${message}
+      <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+    </div>
+  `;
+  
+  const alertContainer = document.createElement('div');
+  alertContainer.innerHTML = alertHtml;
+  
+  // Insert after the swing rules card
+  const swingRulesCard = document.querySelector('.card');
+  swingRulesCard.parentNode.insertBefore(alertContainer.firstElementChild, swingRulesCard.nextSibling);
+  
+  // Auto dismiss after 3 seconds
+  setTimeout(() => {
+    const alert = document.querySelector(`.alert-${type}`);
+    if (alert) {
+      alert.remove();
+    }
+  }, 3000);
 }
 
 document.getElementById("dailyLineupForm").addEventListener("submit", function(e) {
