@@ -50,13 +50,22 @@ class Config:
         "MI": {"baseball_shortstop", "baseball_second_base", "baseball_catcher"},
         "OF": {"baseball_outfield"},
         "SP": {"baseball_starting_pitcher"},
-        "RP": {"baseball_relief_pitcher"}
+        "RP": {"baseball_relief_pitcher"},
+        "1B": {"baseball_first_base"},
+        "2B": {"baseball_second_base"},
+        "3B": {"baseball_third_base"},
+        "SS": {"baseball_shortstop"},
+        "C": {"baseball_catcher"},
+        "DH": {"baseball_designated_hitter"}
     }
     POSITIONS["H"] = POSITIONS["CI"] | POSITIONS["MI"] | POSITIONS["OF"]
     POSITIONS["Flx"] = POSITIONS["CI"] | POSITIONS["MI"] | POSITIONS["OF"] | POSITIONS["RP"]
     POSITIONS["Flx+"] = POSITIONS["CI"] | POSITIONS["MI"] | POSITIONS["OF"] | POSITIONS["RP"] | POSITIONS["SP"]
     LINEUP_SLOTS = ["SP", "RP", "CI", "MI", "OF", "H", "Flx"]
     DAILY_LINEUP_SLOTS = ["SP", "RP", "CI", "MI", "OF", "H", "Flx+"]
+    # Create a reverse mapping from frozenset of positions to their string keys
+    # frozenset is used because sets are mutable and cannot be dictionary keys directly.
+    _REVERSE_POSITIONS = {frozenset(v): k for k, v in POSITIONS.items()}
 
 def create_lineups_table():
     
@@ -716,7 +725,9 @@ def build_all_lineups(cards_df: pd.DataFrame, projections_df: pd.DataFrame, ener
     return lineups
 
 def build_daily_lineups(username: str,  energy_limits: Dict[str, int], boost_2025: float, stack_boost: float,
-                        ignore_players: Optional[List[str]] = None, custom_lineup_order: list[str] = Config.DAILY_LINEUP_ORDER) -> Dict[str, Dict]:
+                        ignore_players: Optional[List[str]] = None, swing_max_team_stack = Config.MAX_TEAM_STACK, swing_lineup = {}, position_boosts = {} ) -> Dict[str, Dict]:
+    
+    #position_boosts = {        "baseball_second_base": 0.2    }
     energy_per_card = 10
     game_week = determine_daily_game_week()
 
@@ -724,8 +735,14 @@ def build_daily_lineups(username: str,  energy_limits: Dict[str, int], boost_202
     cards_df = get_eligible_cards(username, ignore_players, used_cards)
     projections_df = fetch_daily_projections()
     cards_df = merge_projections(cards_df, projections_df)
+    #swing_cards_df = merge_projections(cards_df, projections_df, position_boosts)
+    swing_lineup_slots = get_new_lineup_slots(swing_lineup)
+        
+    
+    logger.info(f"Building daily swing lineups with constraints: {swing_lineup_slots}")
+    logger.info(f"default constraints {Config.DAILY_LINEUP_SLOTS}")
 
-    lineups = generate_lineups_from_cards(cards_df, boost_2025, stack_boost, energy_per_card, energy_limits, custom_lineup_order)
+    lineups = generate_lineups_from_cards(cards_df, boost_2025, stack_boost, energy_per_card, energy_limits, Config.DAILY_LINEUP_ORDER, swing_max_team_stack, swing_lineup_slots)
 
     logger.info(f"presure data {find_pressure_hr_boosts()}")
 
@@ -733,7 +750,7 @@ def build_daily_lineups(username: str,  energy_limits: Dict[str, int], boost_202
 
 def generate_lineups_from_cards(cards_df: pd.DataFrame, boost_2025: float, stack_boost: float,
                                 energy_per_card: int, energy_limits: Dict[str, int], custom_lineup_order: list[str],
-                                max_team_stack: int = Config.MAX_TEAM_STACK) -> Dict[str, Dict]:
+                                swing_max_team_stack: int = Config.MAX_TEAM_STACK, swing_lineup_slots = Config.DAILY_LINEUP_SLOTS) -> Dict[str, Dict]:
     """Generate full set of lineups using greedy and OR-Tools builders."""
     used_card_slugs = set()
     remaining_energy = energy_limits.copy()
@@ -746,10 +763,22 @@ def generate_lineups_from_cards(cards_df: pd.DataFrame, boost_2025: float, stack
 
     first = True
     for lineup_type in energy_lineups + non_energy_lineups:
+        
+        if "Swing" in lineup_type:
+            max_team_stack = swing_max_team_stack
+            lineup_slots = swing_lineup_slots
+        elif "Derby" in lineup_type:     
+            max_team_stack = Config.MAX_TEAM_STACK 
+            lineup_slots = Config.DAILY_LINEUP_SLOTS
+        else:
+            max_team_stack = Config.MAX_TEAM_STACK 
+            lineup_slots = Config.LINEUP_SLOTS
+           
+
         #builder = build_lineup if first else build_lineup_optimized
         lineup_data = build_lineup_optimized(
             cards_df, lineup_type, used_card_slugs, remaining_energy,
-            boost_2025, stack_boost, energy_per_card, Config.LINEUP_SLOTS,
+            boost_2025, stack_boost, energy_per_card, lineup_slots,
             max_team_stack=max_team_stack
         )
         if lineup_data["cards"]:
@@ -761,7 +790,39 @@ def generate_lineups_from_cards(cards_df: pd.DataFrame, boost_2025: float, stack
 
     return lineups
 
-def merge_projections(cards_df: pd.DataFrame, projections_df: pd.DataFrame) -> pd.DataFrame:
+
+def get_new_lineup_slots(swing_lineup_dict):
+    """
+    Converts a swing_lineup dictionary (e.g., {"SP_slot": "SP"})
+    into a list of string representations of eligible lineup slots
+    (e.g., ["SP", "RP", "CI", ...]).
+
+    Args:
+        swing_lineup_dict (dict): A dictionary where values are position restriction
+                                  strings (e.g., "SP", "CI", "2B").
+
+    Returns:
+        list: A list of strings representing the lineup slots,
+              in the same format as Config.DAILY_LINEUP_SLOTS.
+    """
+    lineup_slots_as_strings = []
+    for slot_name, restriction in swing_lineup_dict.items():
+        # Step 1: Get the set of eligible positions for the current restriction
+        pos_set = Config.POSITIONS.get(restriction, Config.POSITIONS["Flx+"])
+
+        # Step 2: Convert this set back to its string representation
+        # using the _REVERSE_POSITIONS mapping.
+        string_key = Config._REVERSE_POSITIONS.get(frozenset(pos_set))
+        if string_key:
+            lineup_slots_as_strings.append(string_key)
+        else:
+            # Fallback if a set somehow doesn't map back (shouldn't happen with valid inputs)
+            logger.warning(f"Could not find a string mapping for position set: {pos_set}. Appending its string representation.")
+            lineup_slots_as_strings.append(str(pos_set))
+    return lineup_slots_as_strings
+
+
+def merge_projections(cards_df: pd.DataFrame, projections_df: pd.DataFrame, position_boosts: Optional[Dict[str, float]] = None) -> pd.DataFrame:
     """Merge cards with projections, defaulting missing values to zero."""
     merged = cards_df.merge(
         projections_df,
@@ -771,6 +832,23 @@ def merge_projections(cards_df: pd.DataFrame, projections_df: pd.DataFrame) -> p
     )
     merged = merged.infer_objects()
     merged = merged.fillna({"total_projection": 0})
+
+    # Apply position boosts
+    if position_boosts:
+        def apply_position_boost(row):
+            positions = row.get("positions", "")
+            if not positions:
+                return row["total_projection"]
+            boost = 0
+            for pos in positions.split(","):
+                pos = pos.strip()
+                if pos in position_boosts:
+                    boost = max(boost, position_boosts[pos])  # Take highest boost if multiple
+            return row["total_projection"] * (1 + boost)
+
+        merged["total_projection"] = merged.apply(apply_position_boost, axis=1)
+
+
     return merged
 
 def get_eligible_cards(username: str, ignore_list: Optional[List[str]] = None, used_card_slugs: Optional[Set[str]] = None) -> pd.DataFrame:

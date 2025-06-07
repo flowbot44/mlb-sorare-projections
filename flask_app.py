@@ -1197,13 +1197,26 @@ def generate_daily_lineup():
     rare_energy = int(request.form.get('rare_energy', 0))
     limited_energy = int(request.form.get('limited_energy', 0))
 
+    unique_players = int(request.form.get('unique_players', 6))
+
+    position_restrictions = {
+        'SP': request.form.get('pos_SP', 'SP'),
+        'RP': request.form.get('pos_RP', 'RP'),
+        'CI': request.form.get('pos_CI', 'CI'),
+        'MI': request.form.get('pos_MI', 'MI'),
+        'OF': request.form.get('pos_OF', 'OF'),
+        'H': request.form.get('pos_H', 'H'),
+        'Flx+': request.form.get('pos_Flx', 'Flx+')
+    }
+
     ignore_list = [p.strip() for p in ignore_players if p.strip()]
 
     energy_limits = {
         "rare": rare_energy,
         "limited": limited_energy
     }
-    lineups = build_daily_lineups(username, energy_limits, boost_2025, stack_boost, ignore_list)
+
+    lineups = build_daily_lineups(username, energy_limits, boost_2025, stack_boost, ignore_list, unique_players,position_restrictions)
 
     return render_template("partials/daily_results.html", lineups=lineups, username=username, game_week=datetime.now().strftime('%Y-%m-%d'))
 
