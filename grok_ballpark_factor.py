@@ -41,7 +41,7 @@ def init_db():
     # Create or update tables - PostgreSQL syntax
     c.execute('''CREATE TABLE IF NOT EXISTS stadiums 
                  (id INTEGER PRIMARY KEY, name TEXT, lat REAL, lon REAL, orientation REAL, is_dome INTEGER)''')
-    c.execute('DROP TABLE IF EXISTS games CASCADE')
+
     c.execute('''CREATE TABLE IF NOT EXISTS games 
                  (id INTEGER PRIMARY KEY, date TEXT, time TEXT, stadium_id INTEGER, 
                   home_team_id INTEGER, away_team_id INTEGER,
@@ -52,7 +52,7 @@ def init_db():
                  (id SERIAL PRIMARY KEY, game_id INTEGER, 
                   wind_dir REAL, wind_speed REAL, temp REAL, rain REAL, timestamp TEXT)''')
     
-    c.execute('DROP TABLE IF EXISTS adjusted_projections CASCADE')
+
     c.execute('''CREATE TABLE IF NOT EXISTS adjusted_projections 
                 (id SERIAL PRIMARY KEY, player_name TEXT, mlbam_id TEXT,
                  game_id INTEGER, game_date TEXT, sorare_score REAL, team_id INTEGER, game_week TEXT)''')
@@ -61,6 +61,7 @@ def init_db():
     c.execute('''CREATE TABLE IF NOT EXISTS player_teams 
              (id SERIAL PRIMARY KEY, player_id TEXT, 
               player_name TEXT, team_id INTEGER, mlbam_id TEXT)''')
+    
     
     # Create new table for player handedness
     c.execute('''CREATE TABLE IF NOT EXISTS player_handedness 
@@ -264,13 +265,46 @@ def get_schedule(conn, start_date, end_date):
 
 def populate_player_teams(conn, start_date, end_date, update_rosters=False):
     c = conn.cursor()
+    
     if not update_rosters:
+        # Check if rosters were updated within the last hour
+        # First check if we have any data at all
+        c.execute("SELECT COUNT(*) FROM player_handedness WHERE last_updated IS NOT NULL")
+        count_with_timestamps = c.fetchone()[0]
+        
+        if count_with_timestamps > 0:
+            # Get the most recent timestamp by converting to timestamp for comparison
+            c.execute("""
+                SELECT last_updated 
+                FROM player_handedness 
+                WHERE last_updated IS NOT NULL
+                ORDER BY last_updated::TIMESTAMP DESC 
+                LIMIT 1
+            """)
+            last_update_str = c.fetchone()[0]
+            
+            try:
+                # Parse the text timestamp
+                last_update = datetime.strptime(last_update_str, "%Y-%m-%d %H:%M:%S")
+                # Calculate time difference
+                time_diff = datetime.now() - last_update
+                if time_diff.total_seconds() < 3600:  # 3600 seconds = 1 hour
+                    logger.info(f"Using cached roster data. Last updated: {last_update}")
+                    return
+                else:
+                    logger.info(f"Roster data is stale (last updated: {last_update}). Fetching new data...")
+            except ValueError:
+                logger.warning(f"Could not parse timestamp: {last_update_str}")
+                # Fall through to check for existing data
+        
+        # Fallback check for existing data if no valid timestamp available
         c.execute("SELECT COUNT(*) FROM player_teams")
         existing_count = c.fetchone()[0]
         if existing_count > 0:
-            logger.info("Using cached roster data.")
+            logger.info("Using cached roster data (no valid timestamp available).")
             return
-        logger.info("No cached roster data found; fetching rosters...")
+            
+        logger.info("Roster data is stale or missing; fetching rosters...")
 
     logger.info("Updating roster data...")
     c.execute("DELETE FROM player_teams")
@@ -285,7 +319,7 @@ def populate_player_teams(conn, start_date, end_date, update_rosters=False):
     """, (start_date, end_date, start_date, end_date))
     teams = [row[0] for row in c.fetchall()]
 
-    current_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    current_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")  # Convert back to string for TEXT column
 
     player_teams_data = []
     handedness_data = []
@@ -536,10 +570,28 @@ def process_pitcher(
         return
 
     unique_player_key = mlbam_id if mlbam_id else f"{player_name}_{player_team_id}"
+    
+    # Get role information from the enhanced data
+    pitcher_role = pitcher_data.get('pitcher_role', 'unknown')
+    start_percentage = pitcher_data.get('start_percentage', 0.0)
+    
+    # Determine if this pitcher should be treated as a starter
     innings_per_game = pitcher_data.get('ip_per_game', 0)
-    is_generally_starter = innings_per_game > 2.0
-
-    # If pitcher is generally a starter but not starting, set score to 0
+    is_generally_starter = False
+    
+    if pitcher_role == 'starter':
+        is_generally_starter = True
+    elif pitcher_role == 'hybrid':
+        # For hybrid pitchers, consider them "generally a starter" if they start more than 30% of games
+        # or if they're projected to start this specific game
+        is_generally_starter = start_percentage > 0.3 or is_starter
+    elif pitcher_role == 'reliever':
+        is_generally_starter = False
+    else:
+        # Fallback to old logic if role data is missing
+        is_generally_starter = innings_per_game > 2.0
+    
+    # If pitcher is generally a starter but not starting this game, set score to 0
     if is_generally_starter and not is_starter:
         projections.append((player_name, mlbam_id, game_id, local_date, 0.0, game_week_id, player_team_id))
         return
@@ -555,22 +607,55 @@ def process_pitcher(
     })
     is_dome, orientation, wind_dir, wind_speed, temp = stadium_data
 
-    base_stats = {
-        'IP': innings_per_game,
-        'SO': pitcher_data.get('k_per_game', 0),
-        'H': pitcher_data.get('h_per_game', 0),
-        'ER': pitcher_data.get('er_per_game', 0),
-        'BB': pitcher_data.get('bb_per_game', 0),
-        'HBP': pitcher_data.get('hbp_per_game', 0),
-        'W': pitcher_data.get('w_per_game', 0),
-        'HLD': pitcher_data.get('hld_per_game', 0),
-        'S': pitcher_data.get('s_per_game', 0),
-        'RA': not is_starter
-    }
+    # Choose appropriate stats based on pitcher role and game context
+    if pitcher_role == 'hybrid' and is_starter:
+        # Use starting stats for hybrid pitcher when starting
+        base_stats = {
+            'IP': pitcher_data.get('ip_per_start', innings_per_game),
+            'SO': pitcher_data.get('k_per_game', 0),  # Use per-game for K (not split in our data)
+            'H': pitcher_data.get('h_per_start', pitcher_data.get('h_per_game', 0)),
+            'ER': pitcher_data.get('er_per_start', pitcher_data.get('er_per_game', 0)),
+            'BB': pitcher_data.get('bb_per_start', pitcher_data.get('bb_per_game', 0)),
+            'HBP': pitcher_data.get('hbp_per_start', pitcher_data.get('hbp_per_game', 0)),
+            'W': pitcher_data.get('w_per_start', pitcher_data.get('w_per_game', 0)),
+            'HLD': 0,  # Starters don't get holds
+            'S': 0,    # Starters don't get saves
+            'RA': False  # Not a relief appearance
+        }
+    elif pitcher_role == 'hybrid' and not is_starter:
+        # Use relief stats for hybrid pitcher when relieving
+        base_stats = {
+            'IP': pitcher_data.get('ip_per_relief', innings_per_game),
+            'SO': pitcher_data.get('k_per_game', 0),  # Use per-game for K
+            'H': pitcher_data.get('h_per_relief', pitcher_data.get('h_per_game', 0)),
+            'ER': pitcher_data.get('er_per_relief', pitcher_data.get('er_per_game', 0)),
+            'BB': pitcher_data.get('bb_per_relief', pitcher_data.get('bb_per_game', 0)),
+            'HBP': pitcher_data.get('hbp_per_relief', pitcher_data.get('hbp_per_game', 0)),
+            'W': pitcher_data.get('w_per_relief', pitcher_data.get('w_per_game', 0)),
+            'HLD': pitcher_data.get('hld_per_game', 0),
+            'S': pitcher_data.get('s_per_game', 0),
+            'RA': True  # Relief appearance
+        }
+    else:
+        # Use regular per-game stats for pure starters/relievers
+        base_stats = {
+            'IP': innings_per_game,
+            'SO': pitcher_data.get('k_per_game', 0),
+            'H': pitcher_data.get('h_per_game', 0),
+            'ER': pitcher_data.get('er_per_game', 0),
+            'BB': pitcher_data.get('bb_per_game', 0),
+            'HBP': pitcher_data.get('hbp_per_game', 0),
+            'W': pitcher_data.get('w_per_game', 0),
+            'HLD': pitcher_data.get('hld_per_game', 0),
+            'S': pitcher_data.get('s_per_game', 0),
+            'RA': not is_starter
+        }
 
+    # Apply park and weather adjustments
     adjusted_stats = adjust_stats(base_stats, park_factors, is_dome, orientation, wind_dir, wind_speed, temp, is_pitcher=True)
     base_score = calculate_sorare_pitcher_score(adjusted_stats, SCORING_MATRIX)
 
+    # Apply role-based score adjustments
     if not is_starter:
         base_score *= 0.4
     else:
@@ -578,6 +663,7 @@ def process_pitcher(
             conn, game_id, mlbam_id, is_pitcher=True, base_score=base_score
         )
 
+    # Apply injury adjustments
     injury_data = injuries.get(unique_player_key, injuries.get(player_name, {'status': 'Active', 'return_estimate': None}))
     final_score = adjust_score_for_injury(base_score, injury_data['status'], injury_data['return_estimate'], game_date_obj)
 
@@ -795,11 +881,12 @@ def calculate_adjustments(conn, start_date, end_date, game_week_id):
                     if pitcher_dict.get("mlbamid") == "660271":  # Skip Ohtani as pitcher
                         continue
                     is_starter = pitcher_dict.get("mlbamid") in (home_pitcher_id, away_pitcher_id)
+                    
                     process_pitcher(
                         conn, game_data, pitcher_dict, injuries, game_week_id, is_starter,
                         stadium_weather_map, park_factors_map, projections
                     )
-
+            
         # Bulk upsert projections
         if projections:
             args_str = ",".join(c.mogrify("(%s,%s,%s,%s,%s,%s,%s)", proj).decode() for proj in projections)
