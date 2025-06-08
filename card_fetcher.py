@@ -172,7 +172,7 @@ def extract_rarity(rarity_string):
     return parts[0] if parts else rarity_string
 
 def parse_player_string(player_string):
-    match = re.match(r"(.+)-(\d{8})-(\d{4})-(.+)-(\d+)", player_string)
+    match = re.match(r"(.+)-(\d{8})-(\d{4})-(common|limited|rare)-([a-f0-9\-]+)", player_string)
     if match:
         return {
             "name": normalize_name(match.group(1).replace("-", " ")),
