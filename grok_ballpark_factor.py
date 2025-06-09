@@ -62,7 +62,7 @@ def init_db():
              (id SERIAL PRIMARY KEY, player_id TEXT, 
               player_name TEXT, team_id INTEGER, mlbam_id TEXT)''')
     
-    
+    c.execute('DROP TABLE IF EXISTS player_handedness CASCADE')
     # Create new table for player handedness
     c.execute('''CREATE TABLE IF NOT EXISTS player_handedness 
                  (id SERIAL PRIMARY KEY, 

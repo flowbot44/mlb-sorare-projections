@@ -1,0 +1,13 @@
+<div class="missing-projections-content">
+    <h2>PLAYERS LACKING PROJECTIONS</h2>
+    {% if missing_projections|length > 0 %}
+        <p>The following players lack projections for the current game week. This means they are on the IL or not on a roster aka DFA or AAA</p>
+        <ul>
+            {% for _, row in missing_projections.iterrows() %}
+                <li>{{ row['name']  }} (slug: {{ row['slug']  }})</li>
+            {% endfor %}
+        </ul>
+    {% else %}
+        <p>All players have projections for the current game week. Great!</p>
+    {% endif %}
+</div>
