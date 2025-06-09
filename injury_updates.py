@@ -68,7 +68,7 @@ def update_database(data):
         # cursor.execute("DELETE FROM injuries")
 
         for team in data.get("injuries", []):
-            team_name = team.get("team", {}).get("name", "Unknown Team")
+            team_name = team.get("displayName", "Unknown Team")
             for injury in team.get("injuries", []):
                 player_name = normalize_name(injury.get("athlete", {}).get("displayName", "Unknown Player"))
                 status = injury.get("status", "Unknown Status")

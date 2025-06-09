@@ -422,6 +422,103 @@ document.addEventListener('DOMContentLoaded', function () {
             });
         });
     }
+    // Initialize tooltips if Bootstrap 5 is used
+    var tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
+    var tooltipList = tooltipTriggerList.map(function(tooltipTriggerEl) {
+        return new bootstrap.Tooltip(tooltipTriggerEl);
+    });
+
+    const usernameInput = document.getElementById('username');
+
+    // --- JavaScript for Missing Projections ---
+    const missingProjectionsCollapseElement = document.getElementById('missingProjectionsCollapse');
+    const missingProjectionsContent = document.getElementById('missingProjectionsContent');
+    let hasLoadedMissingProjections = false; // Flag to load only once
+
+    missingProjectionsCollapseElement.addEventListener('show.bs.collapse', function () {
+        if (!hasLoadedMissingProjections) {
+            const username = usernameInput.value;
+            if (!username) {
+                missingProjectionsContent.innerHTML = '<div class="alert alert-warning">Please enter your Sorare Username to view missing projections.</div>';
+                return;
+            }
+
+            // Show loading spinner
+            missingProjectionsContent.innerHTML = `
+                <div class="text-center">
+                    <div class="spinner-border text-primary" role="status">
+                        <span class="visually-hidden">Loading missing projections...</span>
+                    </div>
+                    <p class="mt-2">Loading players lacking projections...</p>
+                </div>
+            `;
+
+            // Fetch missing projections
+            fetch(`/fetch_missing_projections?username=${encodeURIComponent(username)}`)
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error('Network response was not ok');
+                    }
+                    return response.text();
+                })
+                .then(html => {
+                    missingProjectionsContent.innerHTML = html;
+                    hasLoadedMissingProjections = true;
+                })
+                .catch(error => {
+                    console.error('Error fetching missing projections:', error);
+                    missingProjectionsContent.innerHTML = `<div class="alert alert-danger">Error loading missing projections: ${error.message}. Please try again later.</div>`;
+                });
+        }
+    });
+
+    // --- JavaScript for Sealed Cards Report ---
+    const sealedCardsReportCollapseElement = document.getElementById('sealedCardsReportCollapse');
+    const sealedCardsReportContent = document.getElementById('sealedCardsReportContent');
+    let hasLoadedSealedCardsReport = false; // Flag to load only once
+
+    sealedCardsReportCollapseElement.addEventListener('show.bs.collapse', function () {
+        if (!hasLoadedSealedCardsReport) {
+            const username = usernameInput.value;
+            if (!username) {
+                sealedCardsReportContent.innerHTML = '<div class="alert alert-warning">Please enter your Sorare Username to view the sealed cards report.</div>';
+                return;
+            }
+
+            // Show loading spinner
+            sealedCardsReportContent.innerHTML = `
+                <div class="text-center">
+                    <div class="spinner-border text-primary" role="status">
+                        <span class="visually-hidden">Loading sealed cards report...</span>
+                    </div>
+                    <p class="mt-2">Loading sealed cards report...</p>
+                </div>
+            `;
+
+            // Fetch sealed cards report
+            fetch(`/fetch_sealed_cards_report?username=${encodeURIComponent(username)}`)
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error('Network response was not ok');
+                    }
+                    return response.text();
+                })
+                .then(html => {
+                    sealedCardsReportContent.innerHTML = html;
+                    hasLoadedSealedCardsReport = true;
+                })
+                .catch(error => {
+                    console.error('Error fetching sealed cards report:', error);
+                    sealedCardsReportContent.innerHTML = `<div class="alert alert-danger">Error loading sealed cards report: ${error.message}. Please try again later.</div>`;
+                });
+        }
+    });
+
+    // Reset hasLoaded flags if username changes
+    usernameInput.addEventListener('input', function() {
+        hasLoadedMissingProjections = false;
+        hasLoadedSealedCardsReport = false;
+    });
 });
 
 /**
@@ -574,4 +671,6 @@ function initializeIgnoreGamesClearButton() {
             }
         }, 3000);
     });
+
+   
 }

@@ -222,6 +222,39 @@
                    
         <div class="lineup-content" id="lineupResults"></div>
     </div>
+    <div class="mt-4 mb-4">
+        <button class="btn btn-info w-100" type="button" data-bs-toggle="collapse" data-bs-target="#sealedCardsReportCollapse" aria-expanded="false" aria-controls="sealedCardsReportCollapse" id="toggleSealedCardsReportBtn">
+            <i class="bi bi-box-seam"></i> View Sealed Cards Report
+        </button>
+        <div class="collapse mt-3" id="sealedCardsReportCollapse">
+            <div id="sealedCardsReportContent">
+                <div class="text-center">
+                    <div class="spinner-border text-primary" role="status">
+                        <span class="visually-hidden">Loading sealed cards report...</span>
+                    </div>
+                    <p class="mt-2">Loading sealed cards report...</p>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="mt-4">
+        <button class="btn btn-info w-100" type="button" data-bs-toggle="collapse" data-bs-target="#missingProjectionsCollapse" aria-expanded="false" aria-controls="missingProjectionsCollapse" id="toggleMissingProjectionsBtn">
+            <i class="bi bi-person-x"></i> View Players Lacking Projections
+        </button>
+        <div class="collapse mt-3" id="missingProjectionsCollapse">
+            <div id="missingProjectionsContent">
+                <div class="text-center">
+                    <div class="spinner-border text-primary" role="status">
+                        <span class="visually-hidden">Loading missing projections...</span>
+                    </div>
+                    <p class="mt-2">Loading players lacking projections...</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+   
+
 </div>
 {% endblock %}
 

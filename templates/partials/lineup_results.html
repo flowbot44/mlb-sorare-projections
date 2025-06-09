@@ -59,22 +59,4 @@
         <p>Total Limited Energy Used: {{ total_energy_used.limited }}/{{ energy_limits.limited }} (Remaining: {{ energy_limits.limited - total_energy_used.limited }})</p>
     </div>
 
-    <div class="missing-projections">
-        <h2>PLAYERS LACKING PROJECTIONS</h2>
-        {% if missing_projections %}
-            <p>The following players lack projections:</p>
-            <ul>
-                {% for player in missing_projections %}
-                    <li>{{ player.name }} (slug: {{ player.slug }})</li>
-                {% endfor %}
-            </ul>
-        {% else %}
-            <p>All players have projections. Great!</p>
-        {% endif %}
-    </div>
-    
-    <div class="sealed-cards-report">
-        <h2>SEALED CARDS REPORT</h2>
-        {% include 'partials/sealed_cards_report.html' %}
-    </div>
 </div> 

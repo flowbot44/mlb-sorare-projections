@@ -14,11 +14,10 @@ import traceback
 import re
 
 # Import existing functionality
-from chatgpt_lineup_optimizer import (
-    fetch_cards, fetch_projections, build_all_lineups,
-    Config,
-    build_daily_lineups, get_excluded_lineup_cards_details
-)
+from config import Config
+from services import generate_all_lineups_for_user, generate_daily_lineups_for_user, generate_sealed_cards_report, generate_missing_projections_report
+from database import get_weekly_lineup_details
+
 from card_fetcher import SorareMLBClient
 from injury_updates import fetch_injury_data, update_database
 from grok_ballpark_factor import (
@@ -52,8 +51,8 @@ script_dir = os.path.dirname(os.path.abspath(__file__))
 
 # Default lineup parameters 
 DEFAULT_ENERGY_LIMITS = {"rare": 50, "limited": 50}
-BOOST_2025 = 2.0
-STACK_BOOST = 2.0
+BOOST_2025 = 0.0
+STACK_BOOST = 1.0
 ENERGY_PER_CARD = 25
 DEFAULT_LINEUP_ORDER = [
     "Rare Champion",
@@ -368,252 +367,80 @@ def index():
 
 @app.route('/generate', methods=['POST'])
 def generate_lineup():
-    """Generate lineup based on form inputs and return HTML content"""
-    # Get form data
-    username = request.form.get('username')
-    rare_energy = int(request.form.get('rare_energy', DEFAULT_ENERGY_LIMITS["rare"]))
-    limited_energy = int(request.form.get('limited_energy', DEFAULT_ENERGY_LIMITS["limited"]))
-    boost_2025 = float(request.form.get('boost_2025', BOOST_2025))
-    stack_boost = float(request.form.get('stack_boost', STACK_BOOST))
-    energy_per_card = int(request.form.get('energy_per_card', ENERGY_PER_CARD))
-    lineup_order = request.form.get('lineup_order', ','.join(DEFAULT_LINEUP_ORDER))
-    ignore_players = request.form.get('ignore_players', '')
-    ignore_games = request.form.get('ignore_games', '')
-
-        # Server-side validation
-    if not username:
-        return jsonify({'error': "Sorare Username is required."}), 400
-
+    """Endpoint to generate lineups, now calling the service layer."""
     try:
-        rare_energy = int(rare_energy)
-    except (ValueError, TypeError):
-        return jsonify({'error': "Rare Energy is required and must be a number."}), 400
+        # 1. Get and validate form data
+        form_data = request.form
+        username = form_data.get('username')
+        if not username:
+            return jsonify({'error': "Sorare Username is required."}), 400
 
-    try:
-        limited_energy = int(limited_energy)
-    except (ValueError, TypeError):
-        return jsonify({'error': "Limited Energy is required and must be a number."}), 400
+        rare_energy = int(form_data.get('rare_energy', Config.DEFAULT_ENERGY_LIMITS["rare"]))
+        limited_energy = int(form_data.get('limited_energy', Config.DEFAULT_ENERGY_LIMITS["limited"]))
+        boost_2025 = float(form_data.get('boost_2025', Config.BOOST_2025))
+        stack_boost = float(form_data.get('stack_boost', Config.STACK_BOOST))
+        energy_per_card = int(form_data.get('energy_per_card', Config.ENERGY_PER_NON_2025_CARD))
+        
+        lineup_order_str = form_data.get('lineup_order', ",".join(Config.PRIORITY_ORDER))
+        custom_lineup_order = [re.sub(r'^[^\w]+', '', lo.strip()) for lo in lineup_order_str.split(',')]
+        
+        ignore_players_str = form_data.get('ignore_players', '')
+        ignore_list = [name.strip() for name in ignore_players_str.split(',') if name.strip()]
+        
+        energy_limits = {"rare": rare_energy, "limited": limited_energy}
 
-    try:
-        boost_2025 = float(boost_2025)
-    except (ValueError, TypeError):
-        return jsonify({'error': "2025 Card Boost is required and must be a number."}), 400
-
-    try:
-        stack_boost = float(stack_boost)
-    except (ValueError, TypeError):
-        return jsonify({'error': "Stack Boost is required and must be a number."}), 400
-
-    try:
-        energy_per_card = int(energy_per_card)
-    except (ValueError, TypeError):
-        return jsonify({'error': "Energy per card must be a number."}), 400
-
-    # Parse ignore players list
-    ignore_list = []
-    if ignore_players:
-        ignore_list = [name.strip() for name in ignore_players.split(',') if name.strip()]
-
-    # Parse ignore games list
-    ignore_game_ids = []
-    if ignore_games:
-        try:
-            ignore_game_ids = [int(game_id.strip()) for game in ignore_games.split(',') if (game_id := game.strip()).isdigit()]
-        except Exception as e:
-            return jsonify({'error': f"Error parsing game IDs: {str(e)}. Make sure all IDs are valid integers."})
-
-    
-    # Remove any leading non-alphanumeric characters (like ☰) from each lineup name
-    custom_lineup_order = [
-        re.sub(r'^[^\w]+', '', lineup.strip()) if lineup else ""
-        for lineup in lineup_order.split(',')
-    ]
-    
-    # Set energy limits
-    energy_limits = {
-        "rare": rare_energy,
-        "limited": limited_energy
-    }
-
-    try:
-        # FIRST: Fetch latest cards from Sorare API for this user
-        sorare_client = SorareMLBClient()
-        result = sorare_client.get_user_mlb_cards(username)
-
-        if not result:
-            return jsonify({'error': f"Failed to fetch cards for user {username} from Sorare."})
-
-        # THEN: Fetch cards from the database
-        cards_df = fetch_cards(username)
-
-        # Pass ignore_game_ids to fetch_projections
-        projections_df = fetch_projections(ignore_game_ids=ignore_game_ids)
-
-        if cards_df.empty:
-            return jsonify({'error': f"No eligible cards found for {username}."})
-        if projections_df.empty:
-            return jsonify({'error': f"No projections available for game week {determine_game_week()}. Update the database first."})
-
-        # Generate lineups
-        lineups = build_all_lineups(
-            cards_df=cards_df,
-            projections_df=projections_df,
+        # 2. Call the service to do the heavy lifting
+        result = generate_all_lineups_for_user(
+            username=username,
             energy_limits=energy_limits,
             boost_2025=boost_2025,
             stack_boost=stack_boost,
             energy_per_card=energy_per_card,
             ignore_list=ignore_list,
-            custom_lineup_order=custom_lineup_order,
-            username=username
+            custom_lineup_order=custom_lineup_order
         )
 
+        if "error" in result:
+            return jsonify({'error': result["error"]}), 500
 
-        # Calculate total energy used
+        # 3. Prepare data for the template
+        # (This part can be expanded based on what lineup_results.html needs)
+        lineups = result["lineups"]
         total_energy_used = {"rare": 0, "limited": 0}
-        for lineup_type in custom_lineup_order:
-            data = lineups.get(lineup_type)
-            if data and data["cards"]:
-                total_energy_used["rare"] += data["energy_used"]["rare"]
-                total_energy_used["limited"] += data["energy_used"]["limited"]
+        for data in lineups.values():
+            if data and "energy_used" in data:
+                total_energy_used["rare"] += data["energy_used"].get("rare", 0)
+                total_energy_used["limited"] += data["energy_used"].get("limited", 0)
+        
 
-        # Find players missing projections
-        merged = cards_df.merge(projections_df, left_on="name", right_on="player_name", how="left")
-        missing_projections = merged[merged["total_projection"].isna()]
-        missing_projections_list = []
+        
 
-        if not missing_projections.empty:
-            for _, row in missing_projections.iterrows():
-                missing_projections_list.append({"name": row['name'], "slug": row['slug']})
-
-        # Fetch sealed cards data for the template
-
-        conn = get_db_connection()
-
-        # Get current date and game week dates
-        current_date = datetime.now()
-        try:
-            current_game_week = determine_game_week()
-            # Parse the game week to get start and end dates
-            start_date_str, end_date_str = current_game_week.split("_to_")
-            start_date = datetime.strptime(start_date_str, "%Y-%m-%d")
-            end_date = datetime.strptime(end_date_str, "%Y-%m-%d")
-        except Exception:
-            # Fallback to 7 days if game week format is unexpected
-            start_date = current_date
-            end_date = current_date + timedelta(days=7)
-
-        # Part 1: Get sealed cards with projections
-        query = """
-        SELECT c.slug, c.name, c.year, c.rarity, c.positions,
-               COUNT(ap.game_id) as game_count,
-               SUM(ap.sorare_score) as total_projected_score,
-               AVG(ap.sorare_score) as avg_projected_score,
-               MIN(ap.game_date) as next_game_date
-        FROM cards c
-        JOIN adjusted_projections ap ON c.name = ap.player_name
-        WHERE c.username = %s AND c.sealed = TRUE AND ap.game_date >= %s
-        GROUP BY c.slug, c.name, c.year, c.rarity, c.positions
-        ORDER BY next_game_date ASC
-        """
-
-        cursor = conn.cursor()
-        cursor.execute(query, (username, current_date.strftime('%Y-%m-%d')))
-        projection_results = cursor.fetchall()
-
-        projections_df = None
-        if projection_results:
-            # Convert to DataFrame
-            columns = ['Slug', 'Name', 'Year', 'Rarity', 'Positions',
-                      'Upcoming Games', 'Total Projected Score', 'Avg Score/Game', 'Next Game Date']
-            projections_df = pd.DataFrame(projection_results, columns=columns)
-
-            # Format the dataframe - round the scores to 2 decimal places
-            projections_df['Total Projected Score'] = projections_df['Total Projected Score'].round(2)
-            projections_df['Avg Score/Game'] = projections_df['Avg Score/Game'].round(2)
-
-        # Part 2: Get injured sealed cards
-        query = """
-        SELECT c.slug, c.name, c.year, c.rarity, c.positions, i.status,
-               i.description, i.return_estimate, i.team
-        FROM cards c
-        JOIN injuries i ON c.name = i.player_name
-        WHERE c.username = %s AND c.sealed = TRUE AND i.return_estimate IS NOT NULL
-        """
-
-        cursor.execute(query, (username,))
-        injury_results = cursor.fetchall()
-
-        injured_df = None
-        if injury_results:
-            # Filter injuries with return dates within game week
-            soon_returning = []
-
-            for result in injury_results:
-                return_estimate = result[7]
-
-                # Check if return_estimate contains a date string
-                try:
-                    # Try different date formats
-                    for date_format in ['%Y-%m-%d', '%m/%d/%Y', '%d-%m-%Y', '%d/%m/%Y']:
-                        try:
-                            return_date = datetime.strptime(return_estimate, date_format)
-                            if start_date <= return_date <= end_date:
-                                soon_returning.append(result)
-                            break
-                        except ValueError:
-                            continue
-                except Exception: # Catch all exceptions if return_estimate is not a date string
-                    # If return_estimate isn't a date, check if it contains keywords
-                    # suggesting imminent return during the game week
-                    keywords = ['day to day', 'game time decision', 'probable',
-                               'questionable', 'today', 'tomorrow', '1-3 days',
-                               'this week', 'expected back', 'returning']
-                    if any(keyword in str(return_estimate).lower() for keyword in keywords):
-                        soon_returning.append(result)
-
-            if soon_returning:
-                columns = ['Slug', 'Name', 'Year', 'Rarity', 'Positions', 'Status',
-                          'Description', 'Return Estimate', 'Team']
-                injured_df = pd.DataFrame(soon_returning, columns=columns)
-
-        conn.close()
-
-        # Render the template with all the necessary data
+        # Render just the results partial to be injected into the page via JS
         lineup_html = render_template(
             'partials/lineup_results.html',
             lineups=lineups,
             energy_limits=energy_limits,
             username=username,
+            game_week=determine_game_week(),
+            priority_order=custom_lineup_order,
+            total_energy_used=total_energy_used,
             boost_2025=boost_2025,
             stack_boost=stack_boost,
             energy_per_card=energy_per_card,
-            game_week=determine_game_week(),
-            priority_order=custom_lineup_order,
             lineup_slots=Config.LINEUP_SLOTS,
-            total_energy_used=total_energy_used,
-            missing_projections=missing_projections_list,
-            current_date=current_date,
-            start_date=start_date,
-            end_date=end_date,
-            projections_df=projections_df,
-            injured_df=injured_df
+            missing_projections= [],
+            
         )
-
-        # Return success with HTML content
+        
         return jsonify({
             'success': True,
-            'lineup_html': lineup_html,
-            'ignored_games': len(ignore_game_ids)
+            'lineup_html': lineup_html
         })
 
     except Exception as e:
-        error_type = type(e).__name__
         tb = traceback.format_exc()
-        logger.error(f"Error generating lineup: {error_type}: {e}\n{tb}")
-        return jsonify({
-            'error': f"Error generating lineup: {error_type}: {e}",
-            'traceback': tb
-        }), 500
+        logger.error(f"Error in /generate route: {type(e).__name__}: {e}\n{tb}")
+        return jsonify({'error': f"An unexpected error occurred: {e}", 'traceback': tb}), 500
 
 @app.route('/platoon', methods=['GET', 'POST'])
 def platoon():
@@ -771,6 +598,36 @@ def update_data():
         })
     except Exception as e:
         return jsonify({'error': f"Error updating data: {str(e)}"})
+
+
+@app.route('/fetch_missing_projections')
+def fetch_missing_projections():
+    username = request.args.get('username')
+    if not username:
+        return "Username is required.", 400
+
+    # In a real application, you would fetch this data from your database or API
+    # based on the username. For demonstration, we'll use dummy data.
+    missing_projections = generate_missing_projections_report(username)
+    
+
+    return render_template('partials/missing_projections_report.html',
+                           missing_projections=missing_projections)
+
+@app.route('/fetch_sealed_cards_report')
+def fetch_sealed_cards_report():
+    username = request.args.get('username')
+    if not username:
+        return "Username is required.", 400
+
+    current_date, start_date, end_date, projections_df, injured_df = generate_sealed_cards_report(username)
+
+    return render_template('partials/sealed_cards_report.html',
+                           current_date=current_date,
+                           start_date=start_date,
+                           end_date=end_date,
+                           projections_df=projections_df,
+                           injured_df=injured_df)
 
 @app.route('/check_db')
 def check_db():
@@ -1190,35 +1047,56 @@ def daily_form():
 
 @app.route("/daily-lineup", methods=["POST"])
 def generate_daily_lineup():
-    username = request.form["username"]
-    ignore_players = request.form.get("ignore_players", "").split(",")
-    boost_2025 = float(request.form.get("boost_2025", 0.0))
-    stack_boost = float(request.form.get("stack_boost", 2.0))
-    rare_energy = int(request.form.get('rare_energy', 0))
-    limited_energy = int(request.form.get('limited_energy', 0))
+    """Endpoint to generate daily lineups, calling the service layer."""
+    try:
+        username = request.form["username"]
+        ignore_players = request.form.get("ignore_players", "").split(",")
+        boost_2025 = float(request.form.get("boost_2025", 0.0))
+        stack_boost = float(request.form.get("stack_boost", 0.0))
+        rare_energy = int(request.form.get('rare_energy', 0))
+        limited_energy = int(request.form.get('limited_energy', 0))
+        swing_max_team_stack = int(request.form.get('unique_players', 6))
 
-    unique_players = int(request.form.get('unique_players', 6))
+        ignore_list = [p.strip() for p in ignore_players if p.strip()]
+        energy_limits = {"rare": rare_energy, "limited": limited_energy}
 
-    position_restrictions = {
-        'SP': request.form.get('pos_SP', 'SP'),
-        'RP': request.form.get('pos_RP', 'RP'),
-        'CI': request.form.get('pos_CI', 'CI'),
-        'MI': request.form.get('pos_MI', 'MI'),
-        'OF': request.form.get('pos_OF', 'OF'),
-        'H': request.form.get('pos_H', 'H'),
-        'Flx+': request.form.get('pos_Flx', 'Flx+')
-    }
+        result = generate_daily_lineups_for_user(
+            username=username,
+            energy_limits=energy_limits,
+            boost_2025=boost_2025,
+            stack_boost=stack_boost,
+            ignore_list=ignore_list,
+            swing_max_team_stack=swing_max_team_stack
+        )
 
-    ignore_list = [p.strip() for p in ignore_players if p.strip()]
+        if "error" in result:
+            return jsonify({'error': result["error"]}), 500
+        
+        return render_template(
+            "partials/daily_results.html", 
+            lineups=result["lineups"], 
+            username=username, 
+            game_week=datetime.now().strftime('%Y-%m-%d')
+        )
 
-    energy_limits = {
-        "rare": rare_energy,
-        "limited": limited_energy
-    }
+    except Exception as e:
+        tb = traceback.format_exc()
+        logger.error(f"Error in /daily-lineup route: {type(e).__name__}: {e}\n{tb}")
+        return jsonify({'error': f"An unexpected error occurred: {e}", 'traceback': tb}), 500
 
-    lineups = build_daily_lineups(username, energy_limits, boost_2025, stack_boost, ignore_list, unique_players,position_restrictions)
+@app.route('/fetch_excluded_lineups')
+def fetch_excluded_lineups():
+    """Fetches and renders cards used in weekly lineups that are excluded from daily."""
+    username = request.args.get('username')
+    if not username:
+        return jsonify({"error": "Username is required"}), 400
 
-    return render_template("partials/daily_results.html", lineups=lineups, username=username, game_week=datetime.now().strftime('%Y-%m-%d'))
+    game_week = determine_daily_game_week()
+    
+    # This now calls the clean function from the database module
+    excluded_lineups = get_weekly_lineup_details(username, game_week)
+    
+    return render_template('partials/excluded_lineups.html', excluded_lineups=excluded_lineups)
 
 @app.route('/update_daily', methods=['POST'])
 def update_daily():
@@ -1245,17 +1123,6 @@ def update_daily():
         })
     except Exception as e:
         return jsonify({'error': f"Error updating data: {str(e)}"})
-
-@app.route('/fetch_excluded_lineups')
-def fetch_excluded_lineups():
-    username = request.args.get('username')
-    if not username:
-        return jsonify({"error": "Username is required"}), 400
-
-    game_week = determine_daily_game_week() # Dynamically determine the current game week
-
-    excluded_lineups = get_excluded_lineup_cards_details(username, game_week)
-    return render_template('partials/excluded_lineups.html', excluded_lineups=excluded_lineups)
 
 
 @app.route('/hr-odds')
