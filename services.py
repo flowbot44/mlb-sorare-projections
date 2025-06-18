@@ -22,6 +22,7 @@ def generate_all_lineups_for_user(
     stack_boost: float,
     energy_per_card: int,
     ignore_list: List[str],
+    ignore_games: List[int],
     custom_lineup_order: List[str] = Config.PRIORITY_ORDER
 ) -> Dict:
     """
@@ -32,7 +33,7 @@ def generate_all_lineups_for_user(
 
     # 1. Fetch and Prepare Data
     cards_df = fetch_cards(username)
-    projections_df = fetch_projections()
+    projections_df = fetch_projections(ignore_game_ids=ignore_games)
 
     if cards_df.empty or projections_df.empty:
         error_message = "Could not fetch necessary card or projection data."
@@ -84,7 +85,9 @@ def generate_daily_lineups_for_user(
     boost_2025: float,
     stack_boost: float,
     ignore_list: List[str],
-    swing_max_team_stack: int
+    ignore_games: List[int],
+    swing_max_team_stack: int,
+    positional_boosts: Optional[Dict[str, float]] = None
 ) -> Dict:
     """
     Service function to generate lineups for daily contests.
@@ -95,7 +98,7 @@ def generate_daily_lineups_for_user(
     # 1. Fetch Data, respecting cards already used in weekly lineups
     used_in_weekly = get_used_card_slugs(username, game_week)
     cards_df = fetch_cards(username)
-    projections_df = fetch_daily_projections()
+    projections_df = fetch_daily_projections(ignore_game_ids=ignore_games)
     
     if cards_df.empty or projections_df.empty:
         return {"error": "Could not fetch cards or daily projections."}
@@ -118,7 +121,7 @@ def generate_daily_lineups_for_user(
         
         lineup_data = build_lineup_optimized(
             merged_df, lineup_type, used_card_slugs, remaining_energy,
-            boost_2025, stack_boost, energy_per_card, lineup_slots, max_stack
+            boost_2025, stack_boost, energy_per_card, lineup_slots, max_stack, positional_boosts
         )
         if lineup_data and lineup_data.get("cards"):
             all_lineups[lineup_type] = lineup_data

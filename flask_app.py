@@ -387,6 +387,14 @@ def generate_lineup():
         ignore_players_str = form_data.get('ignore_players', '')
         ignore_list = [name.strip() for name in ignore_players_str.split(',') if name.strip()]
         
+        ignore_games = form_data.get('ignore_games', '')
+        ignore_game_ids = []
+        if ignore_games:
+            try:
+                ignore_game_ids = [int(game_id.strip()) for game in ignore_games.split(',') if (game_id := game.strip()).isdigit()]
+            except Exception as e:
+                return jsonify({'error': f"Error parsing game IDs: {str(e)}. Make sure all IDs are valid integers."})
+
         energy_limits = {"rare": rare_energy, "limited": limited_energy}
 
         # 2. Call the service to do the heavy lifting
@@ -397,7 +405,9 @@ def generate_lineup():
             stack_boost=stack_boost,
             energy_per_card=energy_per_card,
             ignore_list=ignore_list,
-            custom_lineup_order=custom_lineup_order
+            custom_lineup_order=custom_lineup_order,
+            ignore_games=ignore_game_ids
+
         )
 
         if "error" in result:
@@ -542,14 +552,6 @@ def fetch_user_cards():
     except Exception as e:
         return jsonify({'error': f"Error fetching cards: {str(e)}"})
 
-@app.route('/download_lineup/<username>')
-def download_lineup(username):
-    """Allow downloading the generated lineup file"""
-    filename = f"lineups/{username}.txt"
-    if os.path.exists(filename):
-        return send_file(filename, as_attachment=True)
-    else:
-        return "Lineup file not found. Please generate it first.", 404
 
 def check_if_projections_exist(game_week_id):
     """Check if projections already exist for a specific game week"""
@@ -1059,6 +1061,20 @@ def generate_daily_lineup():
 
         ignore_list = [p.strip() for p in ignore_players if p.strip()]
         energy_limits = {"rare": rare_energy, "limited": limited_energy}
+        ignore_games = request.form.get('ignore_games', '')
+        ignore_game_ids = []
+        if ignore_games:
+            try:
+                ignore_game_ids = [int(game_id.strip()) for game in ignore_games.split(',') if (game_id := game.strip()).isdigit()]
+            except Exception as e:
+                return jsonify({'error': f"Error parsing game IDs: {str(e)}. Make sure all IDs are valid integers."})
+            
+                # Dynamically create positional_boosts dictionary from form data
+        # Create positional_boosts dictionary from the dropdown
+        positional_boosts = {}
+        selected_boost_position = request.form.get("positional_boost")
+        if selected_boost_position and selected_boost_position != "None":
+            positional_boosts[selected_boost_position] = 30.0
 
         result = generate_daily_lineups_for_user(
             username=username,
@@ -1066,7 +1082,9 @@ def generate_daily_lineup():
             boost_2025=boost_2025,
             stack_boost=stack_boost,
             ignore_list=ignore_list,
-            swing_max_team_stack=swing_max_team_stack
+            ignore_games=ignore_game_ids,
+            swing_max_team_stack=swing_max_team_stack,
+            positional_boosts=positional_boosts
         )
 
         if "error" in result:
