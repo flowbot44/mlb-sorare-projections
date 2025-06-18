@@ -420,7 +420,7 @@ def adjust_score_for_injury(base_score, injury_status, return_estimate, game_dat
             logger.error(f"Warning: Invalid return date format '{return_estimate}', treating as None")
             return_estimate_date = None
 
-    if injury_status in INJURY_STATUSES_OUT and (not return_estimate_date or game_date <= return_estimate_date):
+    if injury_status in INJURY_STATUSES_OUT and (not return_estimate_date or game_date < return_estimate_date):
         return 0.0
     if injury_status == DAY_TO_DAY_STATUS and return_estimate_date and game_date <= return_estimate_date:
         return base_score * DAY_TO_DAY_REDUCTION
@@ -590,7 +590,7 @@ def process_pitcher(
     else:
         # Fallback to old logic if role data is missing
         is_generally_starter = innings_per_game > 2.0
-    
+   
     # If pitcher is generally a starter but not starting this game, set score to 0
     if is_generally_starter and not is_starter:
         projections.append((player_name, mlbam_id, game_id, local_date, 0.0, game_week_id, player_team_id))
@@ -665,8 +665,9 @@ def process_pitcher(
 
     # Apply injury adjustments
     injury_data = injuries.get(unique_player_key, injuries.get(player_name, {'status': 'Active', 'return_estimate': None}))
+    
     final_score = adjust_score_for_injury(base_score, injury_data['status'], injury_data['return_estimate'], game_date_obj)
-
+    
     # Append to projections list
     projections.append((player_name, mlbam_id, game_id, local_date, final_score, game_week_id, player_team_id))
 
