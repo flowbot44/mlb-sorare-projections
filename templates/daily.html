@@ -72,11 +72,12 @@
         <h5 class="mb-0"><i class="bi bi-sliders"></i> Swing Rules</h5>
       </div>
       <div class="card-body">
+        <h6 class="mb-3">Restrictions</h6>
         <div class="row mb-3">
           <div class="col-md-6">
             <label for="unique_players" class="form-label">
-              Unique Players 
-              <span class="badge bg-info" data-bs-toggle="tooltip" title="Maximum number of unique players across all lineups (1-7)">
+              Max Player Per Team 
+              <span class="badge bg-info" data-bs-toggle="tooltip" title="Maximum players from each team in your lineup (1-7)">
                 <i class="bi bi-info-circle"></i>
               </span>
             </label>
@@ -204,7 +205,27 @@
             </select>
           </div>
         </div>
-        
+        <h6 class="mb-3">Boosts</h6>
+        <div class="row">
+          <div class="col-md-4 mb-3">
+            <label for="positional_boost" class="form-label">Positional Boost (30%)</label>
+            <select class="form-select" id="positional_boost" name="positional_boost">
+                <option value="None" selected>No Boost</option>
+                <option value="OF">Outfield (OF)</option>
+                <option value="CI">Corner Infield (CI)</option>
+                <option value="MI">Middle Infield (MI)</option>
+                <option value="SP">Starting Pitcher (SP)</option>
+                <option value="RP">Relief Pitcher (RP)</option>
+                <option value="C">Catcher (C)</option>
+                <option value="1B">First Base (1B)</option>
+                <option value="2B">Second Base (2B)</option>
+                <option value="3B">Third Base (3B)</option>
+                <option value="SS">Shortstop (SS)</option>
+                <option value="DH">Designated Hitter (DH)</option>
+            </select>
+            
+          </div>
+        </div>
         <div class="row mt-3">
           <div class="col-12">
             <button type="button" class="btn btn-outline-secondary btn-sm" id="resetPositionRules">
@@ -237,6 +258,7 @@
         <label for="stack_boost" class="form-label">Stack Boost</label>
         <input type="number" step="0.1" class="form-control" id="stack_boost" name="stack_boost" value="2.0">
       </div>
+
     </div>
 
     <div class="mb-3">
