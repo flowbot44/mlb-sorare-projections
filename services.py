@@ -12,6 +12,7 @@ from data_fetcher import fetch_cards, fetch_projections, fetch_daily_projections
 from database import save_lineups_to_database, get_used_card_slugs, get_db_connection
 from lineup_optimizer import build_lineup_optimized, uses_energy_lineup
 from utils import determine_game_week, determine_daily_game_week
+from card_fetcher import SorareMLBClient 
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +31,15 @@ def generate_all_lineups_for_user(
     """
     game_week = determine_game_week()
     logger.info(f"Initiating lineup generation for user '{username}' in game week {game_week}")
+
+    logger.info(f"Fetching latest MLB cards for user '{username}' from Sorare API...") #
+    client = SorareMLBClient() #
+    card_fetch_result = client.get_user_mlb_cards(username) #
+
+    if card_fetch_result is None: # Handle potential errors during card fetching #
+        error_message = "Failed to fetch latest card data from Sorare API." #
+        logger.error(error_message) #
+        return {"error": error_message} #
 
     # 1. Fetch and Prepare Data
     cards_df = fetch_cards(username)
@@ -95,6 +105,15 @@ def generate_daily_lineups_for_user(
     game_week = determine_daily_game_week()
     logger.info(f"Initiating daily lineup generation for user '{username}' on {game_week}")
     
+    logger.info(f"Fetching latest MLB cards for user '{username}' from Sorare API...") #
+    client = SorareMLBClient() #
+    card_fetch_result = client.get_user_mlb_cards(username) #
+
+    if card_fetch_result is None: # Handle potential errors during card fetching #
+        error_message = "Failed to fetch latest card data from Sorare API." #
+        logger.error(error_message) #
+        return {"error": error_message} #
+
     # 1. Fetch Data, respecting cards already used in weekly lineups
     used_in_weekly = get_used_card_slugs(username, game_week)
     cards_df = fetch_cards(username)
@@ -109,6 +128,8 @@ def generate_daily_lineups_for_user(
     cards_df = cards_df[~cards_df['slug'].isin(used_in_weekly)]
     merged_df = merge_projections(cards_df, projections_df)
     
+    
+
     # 2. Generate Lineups
     all_lineups: Dict[str, Dict] = {}
     used_card_slugs: Set[str] = set()
