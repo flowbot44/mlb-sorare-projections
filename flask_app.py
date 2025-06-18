@@ -197,7 +197,7 @@ def format_game_dates(high_rain_games):
     for i, game in high_rain_games.iterrows():
         try:
             # Parse the date string (assuming YYYY-MM-DD format from DB)
-            game_date_obj = datetime.strptime(str(game['game_date']), '%Y-%m-%d').date()
+            game_date_obj = datetime.strptime(str(game['local_date']), '%Y-%m-%d').date()
             # Format the date clearly
             high_rain_games.at[i, 'game_date_formatted'] = game_date_obj.strftime("%a, %b %d, %Y")
         except Exception:

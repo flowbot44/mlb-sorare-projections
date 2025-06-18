@@ -5,9 +5,9 @@
         </div>
     </div>
 {% elif high_rain_games.empty or high_rain_games|length == 0 %}
-    <div class='alert alert-info'>No games found with a high rain probability (>= 75%) in the forecast.</div>
+    <div class='alert alert-info'>No games found with a high rain probability (>= 65%) in the forecast.</div>
 {% else %}
-    <div class='alert alert-warning'><strong>Found {{ high_rain_games|length }} game(s) with >= 75% rain probability</strong></div>
+    <div class='alert alert-warning'><strong>Found {{ high_rain_games|length }} game(s) with >= 65% rain probability</strong></div>
     <p>These games <em>may</em> face delays or postponement:</p>
     
     <div class='table-responsive'>
