@@ -1069,7 +1069,18 @@ def generate_daily_lineup():
             except Exception as e:
                 return jsonify({'error': f"Error parsing game IDs: {str(e)}. Make sure all IDs are valid integers."})
             
-                # Dynamically create positional_boosts dictionary from form data
+        position_restrictions_dict = {
+            'SP': request.form.get('pos_SP', 'SP'),
+            'RP': request.form.get('pos_RP', 'RP'),
+            'CI': request.form.get('pos_CI', 'CI'),
+            'MI': request.form.get('pos_MI', 'MI'),
+            'OF': request.form.get('pos_OF', 'OF'),
+            'H': request.form.get('pos_H', 'H'),
+            'Flx+': request.form.get('pos_Flx', 'Flx+')
+        }
+        # Convert the dictionary to a list of values as expected by the function
+        position_restrictions = list(position_restrictions_dict.values())
+
         # Create positional_boosts dictionary from the dropdown
         positional_boosts = {}
         selected_boost_position = request.form.get("positional_boost")
@@ -1084,7 +1095,8 @@ def generate_daily_lineup():
             ignore_list=ignore_list,
             ignore_games=ignore_game_ids,
             swing_max_team_stack=swing_max_team_stack,
-            positional_boosts=positional_boosts
+            positional_boosts=positional_boosts,
+            position_restrictions=position_restrictions
         )
 
         if "error" in result:

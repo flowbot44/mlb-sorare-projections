@@ -58,50 +58,25 @@ def apply_positional_boosts(
 ) -> pd.DataFrame:
     """
     Apply positional boosts to cards based on lineup type and position eligibility.
-    
-    Args:
-        cards_df: DataFrame with card data
-        lineup_type: The type of lineup being built
-        positional_boosts: Dict in format {position_group: boost_percentage}
-                          e.g., {"OF": 30.0} for 30% boost to OF-eligible cards in Swing lineups
-                          Will automatically apply to all Swing lineups regardless of rarity
-    
-    Returns:
-        DataFrame with boosted projections
     """
     if not positional_boosts:
         return cards_df
-    
-    # Only apply boosts to Swing lineups
-    if "Swing" not in lineup_type:
-        return cards_df
-    
+
     cards_df = cards_df.copy()
-    
     for position_group, boost_percentage in positional_boosts.items():
         if position_group not in Config.POSITIONS:
             logger.warning(f"Unknown position group: {position_group}")
             continue
-            
-        # Find cards eligible for this position group
         eligible_mask = cards_df["positions"].apply(
             lambda pos: card_eligible_for_position_group(pos, position_group)
         )
-        
-        # Get the eligible cards for detailed logging
         eligible_cards = cards_df[eligible_mask]
-        
         if len(eligible_cards) > 0:
-            # Apply boost
             boost_multiplier = 1 + (boost_percentage / 100.0)
-            
-            # Apply the boost
             cards_df.loc[eligible_mask, "final_projection"] *= boost_multiplier
-            
             logger.info(f"Successfully applied {boost_percentage}% boost to {len(eligible_cards)} cards")
         else:
             logger.info(f"No cards eligible for {position_group} boost in {lineup_type}")
-    
     return cards_df
 
 
@@ -151,9 +126,12 @@ def build_lineup_optimized(
 
     # Initialize final_projection with base_projection
     available_cards["final_projection"] = available_cards["base_projection"]
-    
-    # Apply positional boosts
-    available_cards = apply_positional_boosts(available_cards, lineup_type, positional_boosts)
+
+    # Only apply positional boosts to Swing lineups
+    if "Swing" in lineup_type:
+        available_cards = apply_positional_boosts(available_cards, lineup_type, positional_boosts)
+
+    logger.info(f"lineup type: {lineup_type}, lineup slots: {lineup_slots}")
 
     solution = _run_or_tools_solver(
         available_cards.to_dict("records"), lineup_type, lineup_slots,

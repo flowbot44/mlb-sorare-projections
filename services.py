@@ -97,7 +97,8 @@ def generate_daily_lineups_for_user(
     ignore_list: List[str],
     ignore_games: List[int],
     swing_max_team_stack: int,
-    positional_boosts: Optional[Dict[str, float]] = None
+    positional_boosts: Optional[Dict[str, float]] = None,
+    position_restrictions: Optional[List[str]] = Config.DAILY_LINEUP_SLOTS
 ) -> Dict:
     """
     Service function to generate lineups for daily contests.
@@ -137,12 +138,18 @@ def generate_daily_lineups_for_user(
     energy_per_card = 10 # Daily contest energy is fixed
 
     for lineup_type in Config.DAILY_LINEUP_ORDER:
-        lineup_slots = Config.DAILY_LINEUP_SLOTS
-        max_stack = swing_max_team_stack if "Swing" in lineup_type else Config.MAX_TEAM_STACK
-        
+        if "Swing" in lineup_type:
+            lineup_slots = position_restrictions if position_restrictions is not None else Config.DAILY_LINEUP_SLOTS
+            max_stack = swing_max_team_stack
+            boosted_df = apply_positional_boosts(merged_df, lineup_type, positional_boosts)
+        else:
+            lineup_slots = Config.DAILY_LINEUP_SLOTS
+            max_stack = Config.MAX_TEAM_STACK
+            boosted_df = merged_df
+
         lineup_data = build_lineup_optimized(
-            merged_df, lineup_type, used_card_slugs, remaining_energy,
-            boost_2025, stack_boost, energy_per_card, lineup_slots, max_stack, positional_boosts
+            boosted_df, lineup_type, used_card_slugs, remaining_energy,
+            boost_2025, stack_boost, energy_per_card, lineup_slots, max_stack
         )
         if lineup_data and lineup_data.get("cards"):
             all_lineups[lineup_type] = lineup_data
@@ -250,4 +257,40 @@ def generate_missing_projections_report(username: str) -> pd.DataFrame:
     projections_df = fetch_projections()
     merged = cards_df.merge(projections_df, left_on="name", right_on="player_name", how="left")
     missing = merged[merged["total_projection"].isna()]
-    return missing  
+    return missing
+
+def apply_positional_boosts(
+    cards_df: pd.DataFrame, 
+    lineup_type: str, 
+    positional_boosts: Optional[Dict[str, float]] = None
+) -> pd.DataFrame:
+    """
+    Apply positional boosts to cards based on lineup type and position eligibility.
+    """
+    if not positional_boosts:
+        return cards_df
+
+    cards_df = cards_df.copy()
+    for position_group, boost_percentage in positional_boosts.items():
+        if position_group not in Config.POSITIONS:
+            logger.warning(f"Unknown position group: {position_group}")
+            continue
+        eligible_mask = cards_df["positions"].apply(
+            lambda pos: card_eligible_for_position_group(pos, position_group)
+        )
+        eligible_cards = cards_df[eligible_mask]
+        if len(eligible_cards) > 0:
+            boost_multiplier = 1 + (boost_percentage / 100.0)
+            cards_df.loc[eligible_mask, "final_projection"] *= boost_multiplier
+            logger.info(f"Successfully applied {boost_percentage}% boost to {len(eligible_cards)} cards")
+        else:
+            logger.info(f"No cards eligible for {position_group} boost in {lineup_type}")
+    return cards_df
+
+def card_eligible_for_position_group(card_positions: str, position_group: str) -> bool:
+    """Check if a card is eligible for a specific position group (e.g., 'OF', 'CI', 'MI')."""
+    if pd.isna(card_positions):
+        return False
+    card_position_set = {pos.strip() for pos in card_positions.split(",")}
+    return bool(card_position_set & Config.POSITIONS.get(position_group, set()))
+
