@@ -128,12 +128,8 @@ def generate_daily_lineups_for_user(
         cards_df = cards_df[~cards_df['name'].str.lower().isin({n.lower() for n in ignore_list})]
     cards_df = cards_df[~cards_df['slug'].isin(used_in_weekly)]
     merged_df = merge_projections(cards_df, projections_df)
-
-    # Fetch and apply custom scoring rules for Daily Swing
-    from database import get_custom_scoring_rules
-    custom_rules = get_custom_scoring_rules(username, "Daily Swing")
-    if custom_rules:
-        merged_df = apply_custom_scoring_rules(merged_df, custom_rules)
+    
+    
 
     # 2. Generate Lineups
     all_lineups: Dict[str, Dict] = {}
@@ -297,24 +293,4 @@ def card_eligible_for_position_group(card_positions: str, position_group: str) -
         return False
     card_position_set = {pos.strip() for pos in card_positions.split(",")}
     return bool(card_position_set & Config.POSITIONS.get(position_group, set()))
-
-def apply_custom_scoring_rules(df: pd.DataFrame, rules: list[dict]) -> pd.DataFrame:
-    df = df.copy()
-    for rule in rules:
-        applies_to = rule["applies_to"]
-        stat = rule["stat"]
-        new_value = rule["new_value"]
-        # Example: For pitcher stats, update the relevant columns
-        if applies_to == "pitcher":
-            mask = df["positions"].str.contains("P") | df["positions"].str.contains("SP") | df["positions"].str.contains("RP")
-            if stat in df.columns:
-                df.loc[mask, stat] = new_value
-        elif applies_to == "hitter":
-            mask = ~df["positions"].str.contains("P|SP|RP")
-            if stat in df.columns:
-                df.loc[mask, stat] = new_value
-        elif applies_to == "all":
-            if stat in df.columns:
-                df[stat] = new_value
-    return df
 
