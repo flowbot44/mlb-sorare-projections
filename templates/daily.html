@@ -99,6 +99,8 @@
             <label for="pos_SP" class="form-label">SP (Starting Pitcher)</label>
             <select class="form-select position-select" id="pos_SP" name="pos_SP">
               <option value="SP" selected>Starting Pitcher Only</option>
+              <option value="RP">Relief Pitcher Only</option>
+              <option value="Flx">Any Non-SP Position</option>
               <option value="Flx+">Any Position</option>
             </select>
           </div>
@@ -106,8 +108,8 @@
           <div class="col-md-4 mb-3">
             <label for="pos_RP" class="form-label">RP (Relief Pitcher)</label>
             <select class="form-select position-select" id="pos_RP" name="pos_RP">
-              <option value="RP" selected>Relief Pitcher Only</option>
               <option value="SP">Starting Pitcher</option>
+              <option value="RP" selected>Relief Pitcher Only</option>
               <option value="Flx">Any Non-SP Position</option>
               <option value="Flx+">Any Position</option>
             </select>
