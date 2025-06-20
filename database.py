@@ -166,9 +166,21 @@ def get_weekly_lineup_details(username: str, game_week: str) -> Dict[str, Dict]:
             for row in results:
                 lineup_type, cards_slugs, slots, projections, score = row
                 
-                # We need card names for display. This requires another query.
-                slug_list = json.loads(cards_slugs)
+                # Handle both JSON string and list for cards_slugs, slots, projections
+                if isinstance(cards_slugs, str):
+                    slug_list = json.loads(cards_slugs)
+                else:
+                    slug_list = cards_slugs
                 if not slug_list: continue
+
+                if isinstance(slots, str):
+                    slots_list = json.loads(slots)
+                else:
+                    slots_list = slots
+                if isinstance(projections, str):
+                    projections_list = json.loads(projections)
+                else:
+                    projections_list = projections
 
                 # Create a placeholder for each slug to pass to the query
                 slug_placeholders = ','.join(['%s'] * len(slug_list))
@@ -178,7 +190,7 @@ def get_weekly_lineup_details(username: str, game_week: str) -> Dict[str, Dict]:
                 card_name_map = {slug: name for slug, name in cursor.fetchall()}
 
                 excluded_cards = []
-                for slug, slot, proj in zip(json.loads(cards_slugs), json.loads(slots), json.loads(projections)):
+                for slug, slot, proj in zip(slug_list, slots_list, projections_list):
                     excluded_cards.append({
                         "card_name": card_name_map.get(slug, slug), # Fallback to slug
                         "slot": slot,
