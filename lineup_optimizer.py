@@ -51,34 +51,6 @@ def card_eligible_for_position_group(card_positions: str, position_group: str) -
     card_position_set = {pos.strip() for pos in card_positions.split(",")}
     return bool(card_position_set & Config.POSITIONS.get(position_group, set()))
 
-def apply_positional_boosts(
-    cards_df: pd.DataFrame, 
-    lineup_type: str, 
-    positional_boosts: Optional[Dict[str, float]] = None
-) -> pd.DataFrame:
-    """
-    Apply positional boosts to cards based on lineup type and position eligibility.
-    """
-    if not positional_boosts:
-        return cards_df
-
-    cards_df = cards_df.copy()
-    for position_group, boost_percentage in positional_boosts.items():
-        if position_group not in Config.POSITIONS:
-            logger.warning(f"Unknown position group: {position_group}")
-            continue
-        eligible_mask = cards_df["positions"].apply(
-            lambda pos: card_eligible_for_position_group(pos, position_group)
-        )
-        eligible_cards = cards_df[eligible_mask]
-        if len(eligible_cards) > 0:
-            boost_multiplier = 1 + (boost_percentage / 100.0)
-            cards_df.loc[eligible_mask, "final_projection"] *= boost_multiplier
-            logger.info(f"Successfully applied {boost_percentage}% boost to {len(eligible_cards)} cards")
-        else:
-            logger.info(f"No cards eligible for {position_group} boost in {lineup_type}")
-    return cards_df
-
 
 def get_rarity_from_lineup_type(lineup_type: str) -> str:
     """Extract rarity from the lineup type string."""
@@ -126,10 +98,6 @@ def build_lineup_optimized(
 
     # Initialize final_projection with base_projection
     available_cards["final_projection"] = available_cards["base_projection"]
-
-    # Only apply positional boosts to Swing lineups
-    if "Swing" in lineup_type:
-        available_cards = apply_positional_boosts(available_cards, lineup_type, positional_boosts)
 
     logger.info(f"lineup type: {lineup_type}, lineup slots: {lineup_slots}")
 

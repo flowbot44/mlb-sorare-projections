@@ -281,7 +281,7 @@ def apply_positional_boosts(
         eligible_cards = cards_df[eligible_mask]
         if len(eligible_cards) > 0:
             boost_multiplier = 1 + (boost_percentage / 100.0)
-            cards_df.loc[eligible_mask, "final_projection"] *= boost_multiplier
+            cards_df.loc[eligible_mask, "total_projection"] *= boost_multiplier
             logger.info(f"Successfully applied {boost_percentage}% boost to {len(eligible_cards)} cards")
         else:
             logger.info(f"No cards eligible for {position_group} boost in {lineup_type}")
