@@ -129,7 +129,6 @@ def generate_daily_lineups_for_user(
     cards_df = cards_df[~cards_df['slug'].isin(used_in_weekly)]
     merged_df = merge_projections(cards_df, projections_df)
     
-    
 
     # 2. Generate Lineups
     all_lineups: Dict[str, Dict] = {}
