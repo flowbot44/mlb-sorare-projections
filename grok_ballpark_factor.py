@@ -1,7 +1,7 @@
 import os
 import requests
 import pandas as pd
-from datetime import datetime, timedelta, date
+from datetime import datetime, timedelta, timezone
 from collections import defaultdict
 from utils import (
     normalize_name, 
@@ -32,6 +32,59 @@ SCORING_MATRIX = {
 INJURY_STATUSES_OUT = ('Out', '10-Day-IL', '15-Day-IL', '60-Day-IL','suspension')
 DAY_TO_DAY_STATUS = 'Day-To-Day'
 DAY_TO_DAY_REDUCTION = 0.5
+
+
+# --- Place this new function after your import statements ---
+# --- Replace your existing get_starting_lineup function with this corrected version ---
+def get_starting_lineup(game_pk):
+    """
+    Fetches the starting lineup for a given game ID (gamePk) from the MLB Stats API
+    using the /boxscore endpoint.
+
+    Args:
+        game_pk (int): The unique identifier for the game.
+
+    Returns:
+        set: A set of MLBAM IDs of players in the starting lineup for both teams.
+             Returns None if the lineup is not yet available or an error occurs.
+    """
+    try:
+        # Updated URL to use the /boxscore endpoint as requested
+        url = f"https://statsapi.mlb.com/api/v1/game/{game_pk}/boxscore"
+        response = requests.get(url, timeout=10)
+        response.raise_for_status()  # Raise an exception for bad status codes (like 404)
+        data = response.json()
+
+        # Adjusted parsing to get 'teams' directly from the root of the boxscore response
+        lineup_data = data.get('teams', {})
+        if not lineup_data or 'away' not in lineup_data or 'home' not in lineup_data:
+            logger.info(f"Lineup data not yet available in boxscore for game {game_pk}.")
+            return None
+
+        starting_lineup_ids = set()
+        
+        # The 'batters' list contains the player IDs in the starting batting order
+        away_batters = lineup_data['away'].get('batters', [])
+        home_batters = lineup_data['home'].get('batters', [])
+
+        if not away_batters or not home_batters:
+            logger.info(f"Starting batting order not yet posted in boxscore for game {game_pk}.")
+            return None
+
+        for player_id in away_batters:
+            starting_lineup_ids.add(str(player_id))
+        for player_id in home_batters:
+            starting_lineup_ids.add(str(player_id))
+
+        logger.info(f"Successfully fetched starting lineup for game {game_pk} with {len(starting_lineup_ids)} players from boxscore.")
+        return starting_lineup_ids
+
+    except requests.RequestException as e:
+        logger.error(f"Error fetching boxscore for game {game_pk}: {e}")
+        return None
+    except Exception as e:
+        logger.error(f"An unexpected error occurred while parsing boxscore for game {game_pk}: {e}")
+        return None
 
 # --- Database Initialization ---
 def init_db():
@@ -426,6 +479,7 @@ def adjust_score_for_injury(base_score, injury_status, return_estimate, game_dat
         return base_score * DAY_TO_DAY_REDUCTION
     return base_score
 
+# --- Replace your existing process_hitter function with this one ---
 def process_hitter(
     conn,
     game_data,
@@ -438,15 +492,16 @@ def process_hitter(
     handedness_map,
     pitcher_names,
     projections,
-    opposing_pitcher_id
+    opposing_pitcher_id,
+    starting_lineup_ids=None  # Add new argument with a default value
 ):
     game_id, game_date, time, stadium_id, home_team_id, away_team_id, local_date = game_data
     game_date_obj = datetime.strptime(local_date, '%Y-%m-%d').date()
 
     player_name = normalize_name(hitter_data.get("name"))
     mlbam_id = hitter_data.get("mlbamid")
-    if not player_name:
-        logger.info(f"Warning: Null Name for hitter in game {game_id}")
+    if not player_name or not mlbam_id:
+        logger.info(f"Warning: Null Name or mlbam_id for hitter in game {game_id}")
         return
 
     player_team_id = hitter_data.get("teamid")
@@ -456,91 +511,82 @@ def process_hitter(
     unique_player_key = mlbam_id if mlbam_id else f"{player_name}_{player_team_id}"
 
     # Use pre-fetched stadium and park factors
-    if stadium_weather_map is None:
-        stadium_weather_map = {}
-    if stadium_weather_map is None:
-        stadium_weather_map = {}
     stadium_data = stadium_weather_map.get(stadium_id, (0, 0, 0, 0, 70))
-    park_factors = park_factors_map.get(stadium_id, {
-        'R': 1.0, 'RBI': 1.0, '1B': 1.0, '2B': 1.0, '3B': 1.0, 'HR': 1.0,
-        'BB': 1.0, 'K': 1.0, 'SB': 1.0, 'CS': 1.0, 'HBP': 1.0
-    })
+    park_factors = park_factors_map.get(stadium_id, {})
     is_dome, orientation, wind_dir, wind_speed, temp = stadium_data
 
     # Determine opposing pitcher and handedness
-    
     pitcher_handedness = handedness_map.get(opposing_pitcher_id, {}).get('throws', 'Unknown')
-    # Ensure mlbam_id is int for matching, fallback to str if conversion fails
-    try:
-        platoon_key = int(mlbam_id)
-    except (TypeError, ValueError):
-        platoon_key = mlbam_id
-    platoon_matchup = platoon_map.get(platoon_key)
-
-    # Select appropriate hitter stats table based on pitcher handedness
+    
+    # Select appropriate hitter stats
     base_stats = {
-        'R': hitter_data.get('r_per_game', 0),
-        'RBI': hitter_data.get('rbi_per_game', 0),
-        '1B': hitter_data.get('singles_per_game', 0),
-        '2B': hitter_data.get('doubles_per_game', 0),
-        '3B': hitter_data.get('triples_per_game', 0),
-        'HR': hitter_data.get('hr_per_game', 0),
-        'BB': hitter_data.get('bb_per_game', 0),
-        'K': hitter_data.get('k_per_game', 0),
-        'SB': hitter_data.get('sb_per_game', 0),
-        'CS': hitter_data.get('cs_per_game', 0),
+        'R': hitter_data.get('r_per_game', 0), 'RBI': hitter_data.get('rbi_per_game', 0),
+        '1B': hitter_data.get('singles_per_game', 0), '2B': hitter_data.get('doubles_per_game', 0),
+        '3B': hitter_data.get('triples_per_game', 0), 'HR': hitter_data.get('hr_per_game', 0),
+        'BB': hitter_data.get('bb_per_game', 0), 'K': hitter_data.get('k_per_game', 0),
+        'SB': hitter_data.get('sb_per_game', 0), 'CS': hitter_data.get('cs_per_game', 0),
         'HBP': hitter_data.get('hbp_per_game', 0)
     }
-
+    
+    # ... (rest of the vs LHP/RHP stat selection logic remains the same)
     if pitcher_handedness == 'L':
-        # Use vs LHP stats if available
         base_stats.update({
-            'R': hitter_data.get('r_per_game_vs_lhp', base_stats['R']),
-            'RBI': hitter_data.get('rbi_per_game_vs_lhp', base_stats['RBI']),
-            '1B': hitter_data.get('singles_per_game_vs_lhp', base_stats['1B']),
-            '2B': hitter_data.get('doubles_per_game_vs_lhp', base_stats['2B']),
-            '3B': hitter_data.get('triples_per_game_vs_lhp', base_stats['3B']),
-            'HR': hitter_data.get('hr_per_game_vs_lhp', base_stats['HR']),
-            'BB': hitter_data.get('bb_per_game_vs_lhp', base_stats['BB']),
-            'K': hitter_data.get('k_per_game_vs_lhp', base_stats['K']),
-            'SB': hitter_data.get('sb_per_game_vs_lhp', base_stats['SB']),
-            'CS': hitter_data.get('cs_per_game_vs_lhp', base_stats['CS']),
+            'R': hitter_data.get('r_per_game_vs_lhp', base_stats['R']), 'RBI': hitter_data.get('rbi_per_game_vs_lhp', base_stats['RBI']),
+            '1B': hitter_data.get('singles_per_game_vs_lhp', base_stats['1B']), '2B': hitter_data.get('doubles_per_game_vs_lhp', base_stats['2B']),
+            '3B': hitter_data.get('triples_per_game_vs_lhp', base_stats['3B']), 'HR': hitter_data.get('hr_per_game_vs_lhp', base_stats['HR']),
+            'BB': hitter_data.get('bb_per_game_vs_lhp', base_stats['BB']), 'K': hitter_data.get('k_per_game_vs_lhp', base_stats['K']),
+            'SB': hitter_data.get('sb_per_game_vs_lhp', base_stats['SB']), 'CS': hitter_data.get('cs_per_game_vs_lhp', base_stats['CS']),
             'HBP': hitter_data.get('hbp_per_game_vs_lhp', base_stats['HBP'])
         })
     elif pitcher_handedness == 'R':
-        # Use vs RHP stats if available
         base_stats.update({
-            'R': hitter_data.get('r_per_game_vs_rhp', base_stats['R']),
-            'RBI': hitter_data.get('rbi_per_game_vs_rhp', base_stats['RBI']),
-            '1B': hitter_data.get('singles_per_game_vs_rhp', base_stats['1B']),
-            '2B': hitter_data.get('doubles_per_game_vs_rhp', base_stats['2B']),
-            '3B': hitter_data.get('triples_per_game_vs_rhp', base_stats['3B']),
-            'HR': hitter_data.get('hr_per_game_vs_rhp', base_stats['HR']),
-            'BB': hitter_data.get('bb_per_game_vs_rhp', base_stats['BB']),
-            'K': hitter_data.get('k_per_game_vs_rhp', base_stats['K']),
-            'SB': hitter_data.get('sb_per_game_vs_rhp', base_stats['SB']),
-            'CS': hitter_data.get('cs_per_game_vs_rhp', base_stats['CS']),
+            'R': hitter_data.get('r_per_game_vs_rhp', base_stats['R']), 'RBI': hitter_data.get('rbi_per_game_vs_rhp', base_stats['RBI']),
+            '1B': hitter_data.get('singles_per_game_vs_rhp', base_stats['1B']), '2B': hitter_data.get('doubles_per_game_vs_rhp', base_stats['2B']),
+            '3B': hitter_data.get('triples_per_game_vs_rhp', base_stats['3B']), 'HR': hitter_data.get('hr_per_game_vs_rhp', base_stats['HR']),
+            'BB': hitter_data.get('bb_per_game_vs_rhp', base_stats['BB']), 'K': hitter_data.get('k_per_game_vs_rhp', base_stats['K']),
+            'SB': hitter_data.get('sb_per_game_vs_rhp', base_stats['SB']), 'CS': hitter_data.get('cs_per_game_vs_rhp', base_stats['CS']),
             'HBP': hitter_data.get('hbp_per_game_vs_rhp', base_stats['HBP'])
         })
 
-    # Platoon adjustment
-    platoon_adjustment = 1.0
 
-    if platoon_matchup and pitcher_handedness and pitcher_handedness != platoon_matchup:
-        platoon_adjustment = 0.25
-        base_stats = {stat: value * platoon_adjustment for stat, value in base_stats.items()}
-        logger.info(f"Applying platoon adjustment for {player_name}: {platoon_adjustment}x due to starter throws {pitcher_handedness} and batter starts vs {platoon_matchup} game {game_id}")
-
-    # Apply park/weather adjustments
+    # Apply park/weather adjustments first
     adjusted_stats = adjust_stats(base_stats, park_factors, is_dome, orientation, wind_dir, wind_speed, temp)
+
+    # Calculate initial score before lineup-based adjustments
     base_score = calculate_sorare_hitter_score(adjusted_stats, SCORING_MATRIX)
     fip_adjusted_score = apply_fip_adjustment(conn, game_id, player_team_id, base_score)
     handedness_adjusted_score = apply_handedness_matchup_adjustment(
         conn, game_id, mlbam_id, is_pitcher=False, base_score=fip_adjusted_score)
-    injury_data = injuries.get(unique_player_key, injuries.get(player_name, {'status': 'Active', 'return_estimate': None}))
-    final_score = adjust_score_for_injury(handedness_adjusted_score, injury_data['status'], injury_data['return_estimate'], game_date_obj)
 
-    # Append to projections list
+    final_score = handedness_adjusted_score
+    
+    # --- NEW LINEUP-BASED ADJUSTMENT LOGIC ---
+    if starting_lineup_ids is not None:
+        # Lineup data is available for this game
+        is_starting = str(mlbam_id) in starting_lineup_ids
+        
+        if not is_starting:
+            # Player is NOT in the lineup, give them 20% of their projection
+            final_score *= 0.20
+            #logger.info(f"Player {player_name} ({mlbam_id}) not in lineup for game {game_id}. Applying 20% projection.")
+    else:
+        # Lineup data is NOT available ( >5 hours to game time), so apply original platoon logic.
+        try:
+            platoon_key = int(mlbam_id)
+        except (TypeError, ValueError):
+            platoon_key = mlbam_id
+        platoon_matchup = platoon_map.get(platoon_key)
+        platoon_adjustment = 1.0
+
+        if platoon_matchup and pitcher_handedness and pitcher_handedness != 'Unknown' and pitcher_handedness != platoon_matchup:
+            platoon_adjustment = 0.25
+            final_score *= platoon_adjustment # Apply adjustment to the already calculated score
+            logger.info(f"Applying platoon adjustment for {player_name}: {platoon_adjustment}x due to starter throws {pitcher_handedness} and batter starts vs {platoon_matchup} game {game_id}")
+            
+    # Apply final injury adjustment
+    injury_data = injuries.get(unique_player_key, injuries.get(player_name, {'status': 'Active', 'return_estimate': None}))
+    final_score = adjust_score_for_injury(final_score, injury_data['status'], injury_data['return_estimate'], game_date_obj)
+
     projections.append((player_name, mlbam_id, game_id, local_date, final_score, game_week_id, player_team_id))
 
 def process_pitcher(
@@ -757,6 +803,7 @@ def add_projected_starting_pitchers(conn, start_date, end_date):
     logger.info(f"Added {pitcher_count} projected starting pitchers to player_teams")
 
 # --- Updates to the main functions ---
+# --- Replace your existing calculate_adjustments function with this corrected version ---
 def calculate_adjustments(conn, start_date, end_date, game_week_id):
     if not isinstance(start_date, str):
         start_date = start_date.strftime('%Y-%m-%d')
@@ -764,13 +811,13 @@ def calculate_adjustments(conn, start_date, end_date, game_week_id):
         end_date = end_date.strftime('%Y-%m-%d')
     
     with conn.cursor() as c:
-        # Prefetch all necessary data
+        # Prefetch all necessary data (this part remains the same)
         c.execute("SELECT mlbam_id, bats, throws FROM player_handedness")
-        handedness_map = {row[0]: {'bats': row[1], 'throws': row[2]} for row in c.fetchall()}
+        handedness_map = {str(row[0]): {'bats': row[1], 'throws': row[2]} for row in c.fetchall()}
         logger.info(f"Loaded {len(handedness_map)} player handedness records")
 
         c.execute("SELECT mlbam_id, team_id FROM player_teams")
-        team_map = {row[0]: row[1] for row in c.fetchall()}
+        team_map = {str(row[0]): row[1] for row in c.fetchall()}
 
         c.execute("SELECT stadium_id, factor_type, value FROM park_factors")
         park_factors_map = {}
@@ -778,27 +825,28 @@ def calculate_adjustments(conn, start_date, end_date, game_week_id):
             park_factors_map.setdefault(stadium_id, {})[factor_type] = value / 100
 
         c.execute("""
-            SELECT s.id, s.is_dome, s.orientation, w.wind_dir, w.wind_speed, w.temp
-            FROM stadiums s
-            LEFT JOIN weather_forecasts w ON w.game_id = s.id
-        """)
+            SELECT g.id, s.is_dome, s.orientation, w.wind_dir, w.wind_speed, w.temp
+            FROM games g
+            LEFT JOIN stadiums s ON g.stadium_id = s.id
+            LEFT JOIN weather_forecasts w ON g.id = w.game_id
+            WHERE g.local_date BETWEEN %s AND %s
+        """, (start_date, end_date))
         stadium_weather_map = {row[0]: row[1:] for row in c.fetchall()}
 
         c.execute("SELECT mlbam_id, starts_vs FROM platoon_players")
         platoon_map = {row[0]: row[1] for row in c.fetchall()}
         
         c.execute("""
-            SELECT i.player_name, i.status, i.return_estimate, pt.team_id
+            SELECT i.player_name, i.status, i.return_estimate, pt.team_id, pt.mlbam_id
             FROM injuries i
             LEFT JOIN player_teams pt ON i.player_name = pt.player_name
         """)
         injuries = {}
-        for player_name, status, return_estimate, team_id in c.fetchall():
+        for player_name, status, return_estimate, team_id, mlbam_id in c.fetchall():
             injuries[player_name] = {'status': status, 'return_estimate': return_estimate}
-            if team_id:
-                injuries[f"{player_name}_{team_id}"] = {'status': status, 'return_estimate': return_estimate}
+            if mlbam_id:
+                injuries[str(mlbam_id)] = {'status': status, 'return_estimate': return_estimate}
 
-        # Fetch pitcher names for probable pitchers
         c.execute("""
             SELECT player_id, player_name FROM player_teams
             WHERE player_id IN (
@@ -810,7 +858,6 @@ def calculate_adjustments(conn, start_date, end_date, game_week_id):
         pitcher_names = {row[0]: normalize_name(row[1]) for row in c.fetchall()}
         logger.info(f"Loaded {len(pitcher_names)} probable pitcher names")
 
-        # Fetch games
         c.execute("""
             SELECT id, date, time, stadium_id, home_team_id, away_team_id, 
                    home_probable_pitcher_id, away_probable_pitcher_id, local_date
@@ -847,50 +894,86 @@ def calculate_adjustments(conn, start_date, end_date, game_week_id):
         all_pitchers = c.fetchall()
         pitcher_columns = [col[0] for col in c.description]
 
-        # Group hitters and pitchers by team
         hitters_by_team = defaultdict(list)
         for hitter in all_hitters:
-            hitter_dict = {hitter_columns[i]: hitter[i] for i in range(len(hitter_columns))}
+            hitter_dict = {hitter_columns[i]: str(hitter[i]) if hitter_columns[i] == 'mlbamid' else hitter[i] for i in range(len(hitter_columns))}
             hitters_by_team[hitter_dict['teamid']].append(hitter_dict)
 
         pitchers_by_team = defaultdict(list)
         for pitcher in all_pitchers:
-            pitcher_dict = {pitcher_columns[i]: pitcher[i] for i in range(len(pitcher_columns))}
+            pitcher_dict = {pitcher_columns[i]: str(pitcher[i]) if pitcher_columns[i] == 'mlbamid' else pitcher[i] for i in range(len(pitcher_columns))}
             pitchers_by_team[pitcher_dict['teamid']].append(pitcher_dict)
 
         # Process games and collect projections
         projections = []
         for game in games:
             game_id, game_date, time, stadium_id, home_team_id, away_team_id, home_pitcher_id, away_pitcher_id, local_date = game
-            game_data = game[:6] + (local_date,)
-             # Process hitters
+            
+            starting_lineup_ids = None
+            try:
+                game_datetime_str = f"{game_date}T{time}"
+                game_start_time_utc = datetime.fromisoformat(game_datetime_str.replace('Z', '+00:00'))
+                now_utc = datetime.now(timezone.utc)
+                time_until_game = game_start_time_utc - now_utc
+                
+                if time_until_game < timedelta(hours=5) and time_until_game > timedelta(hours=-4):
+                    logger.info(f"Game {game_id} is within 5 hours. Checking for lineup.")
+                    starting_lineup_ids = get_starting_lineup(game_id)
+            except Exception as e:
+                logger.error(f"Could not process game time for lineup check on game {game_id}: {e}")
+
+            game_data = (game_id, game_date, time, stadium_id, home_team_id, away_team_id, local_date)
+            
             for team_id in (home_team_id, away_team_id):
                 opposing_pitcher_id = away_pitcher_id if home_team_id == team_id else home_pitcher_id
-           
                 for hitter_dict in hitters_by_team.get(team_id, []):
-                    #if hitter_dict.get("mlbamid") == "660271":  # Skip Ohtani as hitter if needed
-                    #    continue
                     process_hitter(
                         conn, game_data, hitter_dict, injuries, game_week_id,
                         stadium_weather_map, park_factors_map, platoon_map, handedness_map,
-                        pitcher_names, projections, opposing_pitcher_id
+                        pitcher_names, projections, opposing_pitcher_id,
+                        starting_lineup_ids=starting_lineup_ids
                     )
 
-            # Process pitchers
             for team_id in (home_team_id, away_team_id):
                 for pitcher_dict in pitchers_by_team.get(team_id, []):
-                    if pitcher_dict.get("mlbamid") == "660271":  # Skip Ohtani as pitcher
-                        continue
-                    is_starter = pitcher_dict.get("mlbamid") in (home_pitcher_id, away_pitcher_id)
-                    
+                    is_starter = str(pitcher_dict.get("mlbamid")) in (str(home_pitcher_id), str(away_pitcher_id))
                     process_pitcher(
                         conn, game_data, pitcher_dict, injuries, game_week_id, is_starter,
                         stadium_weather_map, park_factors_map, projections
                     )
             
-        # Bulk upsert projections
+        # --- NEW: AGGREGATE PROJECTIONS TO HANDLE TWO-WAY PLAYERS ---
         if projections:
-            args_str = ",".join(c.mogrify("(%s,%s,%s,%s,%s,%s,%s)", proj).decode() for proj in projections)
+            aggregated_projections = {}
+            for proj_tuple in projections:
+                # Unpack the projection tuple
+                (player_name, mlbam_id, game_id, game_date, 
+                 sorare_score, game_week, team_id) = proj_tuple
+                
+                # Create a unique key for each player in each game
+                key = (mlbam_id, game_id)
+
+                if key not in aggregated_projections:
+                    # If this is the first time we see this player/game, store it
+                    aggregated_projections[key] = list(proj_tuple)
+                else:
+                    # If player already exists (i.e., is a two-way player), add the new score
+                    # to the existing one. Index 4 is the sorare_score.
+                    aggregated_projections[key][4] += sorare_score
+                    logger.info(f"Combined hitting/pitching score for {player_name} ({mlbam_id}) in game {game_id}. New total score: {aggregated_projections[key][4]:.2f}")
+
+            # Convert the aggregated data back into a list of tuples
+            final_projections = [tuple(p) for p in aggregated_projections.values()]
+
+            # --- END NEW AGGREGATION LOGIC ---
+
+            # Filter out any potential None values in mlbam_id before upserting
+            valid_projections = [p for p in final_projections if p[1] is not None and p[1] != 'None']
+            if not valid_projections:
+                logger.warning("No valid projections to commit after aggregation.")
+                return
+
+            args_str = ",".join(c.mogrify("(%s,%s,%s,%s,%s,%s,%s)", proj).decode() for proj in valid_projections)
             c.execute(f"""
                 INSERT INTO adjusted_projections 
                 (player_name, mlbam_id, game_id, game_date, sorare_score, game_week, team_id)
@@ -899,9 +982,8 @@ def calculate_adjustments(conn, start_date, end_date, game_week_id):
                 SET sorare_score = EXCLUDED.sorare_score, game_date = EXCLUDED.game_date
             """)
 
-        conn.commit()
-        logger.info("✅ Committed adjusted_projections to database.")
-
+            conn.commit()
+            logger.info("✅ Committed adjusted_projections to database.")
 
 # --- Main Function ---
 def main(update_rosters=False, specified_date=None, daily=False):
