@@ -61,7 +61,7 @@ def get_rarity_from_lineup_type(lineup_type: str) -> str:
 
 def uses_energy_lineup(lineup_type: str) -> bool:
     """Determine if a lineup type consumes energy."""
-    return any(keyword in lineup_type for keyword in ["All-Star", "Champion", "Derby"])
+    return any(keyword in lineup_type for keyword in ["All-Star", "Champion", "Derby", "Legend"])
 
 # --- Main Optimizer ---
 
@@ -84,7 +84,7 @@ def build_lineup_optimized(
     available_cards.loc[is_2025 & is_boostable_lineup, "base_projection"] += boost_2025
 
     rarity = get_rarity_from_lineup_type(lineup_type)
-    if "Champion" in lineup_type or "Challenger" in lineup_type or "Derby" in lineup_type or "Swing" in lineup_type or "Minors" in lineup_type:
+    if "Champion" in lineup_type or "Legend" in lineup_type or "Challenger" in lineup_type or "Derby" in lineup_type or "Swing" in lineup_type or "Minors" in lineup_type:
         available_cards = available_cards[available_cards["rarity"] == rarity]
     elif "All-Star" in lineup_type:
         limits = Config.ALL_STAR_LIMITS.get(f"{rarity.capitalize()} All-Star", {})
@@ -99,13 +99,11 @@ def build_lineup_optimized(
     # Initialize final_projection with base_projection
     available_cards["final_projection"] = available_cards["base_projection"]
 
-    logger.info(f"lineup type: {lineup_type}, lineup slots: {lineup_slots}")
-
     solution = _run_or_tools_solver(
         available_cards.to_dict("records"), lineup_type, lineup_slots,
         remaining_energy, energy_per_card, max_team_stack, stack_boost
     )
-
+    
     return solution if solution.get("cards") else {}
 
 def _run_or_tools_solver(
@@ -228,5 +226,64 @@ def _run_or_tools_solver(
             "projected_score": round(sum(projections), 2),
             "energy_used": energy_used,
         }
+    else:
+        log_message = (
+            f"Solver returned {solver.StatusName(status)} for lineup type '{lineup_type}'. "
+            f"Lineup slots requested: {lineup_slots}. "
+            f"Number of available cards: {num_cards}. "
+            "This indicates that no lineup can satisfy all constraints. \n"
+        )
+        reasons = []
+
+        eligibility_details = {}
+        is_energy_lineup = uses_energy_lineup(lineup_type)
+
+        for slot in lineup_slots:
+            total_eligible = 0
+            energy_exempt_eligible = 0
+            
+            for card in cards:
+                if can_fill_position(card["positions"], slot):
+                    total_eligible += 1
+                    # A card is energy-exempt if it's a 2025 card
+                    # and this is an energy-restricted lineup type.
+                    if is_energy_lineup and card.get("year", 0) == 2025:
+                        energy_exempt_eligible += 1
+            
+            eligibility_details[slot] = {
+                "total_eligible": total_eligible,
+                "energy_exempt_eligible": energy_exempt_eligible
+            }
+            if energy_exempt_eligible == 0:
+                reasons.append(f"Slot '{slot}': No energy-exempt eligible cards available.\n")
+
+        if num_cards < num_slots:
+            reasons.append(f"Not enough total cards ({num_cards}) to fill all slots ({num_slots}).\n")
+        
+        if "All-Star" in lineup_type:
+            rarity = get_rarity_from_lineup_type(lineup_type)
+            limits = Config.ALL_STAR_LIMITS.get(f"{rarity.capitalize()} All-Star", {})
+            for rar_type, max_count in limits.items():
+                if "max_" in rar_type:
+                    limit_rarity = rar_type.split("_")[1]
+                    count_rarity_cards = sum(1 for c in cards if c["rarity"] == limit_rarity)
+                    # Only suggest as a reason if it's potentially violated
+                    if count_rarity_cards > max_count and num_slots > max_count: # Heuristic check
+                        reasons.append(f"Rarity limit for {limit_rarity} cards (max {max_count}) might be too restrictive. Available of this rarity: {count_rarity_cards}.\n")
+
+        if uses_energy_lineup(lineup_type):
+            for rar_type in ["rare", "limited"]:
+                available_energy = remaining_energy.get(rar_type, 0)
+                if available_energy < energy_per_card * num_slots: 
+                    reasons.append(f"Energy limit for {rar_type} cards (remaining: {available_energy}) might be too low, as each selected card costs {energy_per_card}.\n")
+
+
+        if status == cp_model.INFEASIBLE:
+            log_message += "This is often due to conflicting constraints."
+        elif status == cp_model.UNKNOWN:
+            log_message += "This typically means the solver timed out or could not determine feasibility within its limits. Consider increasing `max_time_in_seconds`."
+        
+        log_message += " Specific potential issues: " + "; ".join(reasons)
+        logging.warning(log_message)
 
     return {}
